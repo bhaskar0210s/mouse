@@ -1,0 +1,45 @@
+name: Release
+
+# Push a tag like v1.2.0 to build, sign and publish Mouse.zip. Installed copies of Mouse pick it
+# up automatically (they only accept builds signed with the same certificate).
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tests
+        run: make test
+
+      - name: Import the signing certificate
+        env:
+          CERT_P12: ${{ secrets.MOUSE_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MOUSE_CERT_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p "$CERT_PASSWORD" "$KC"
+          security set-keychain-settings "$KC"
+          security unlock-keychain -p "$CERT_PASSWORD" "$KC"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$CERT_PASSWORD" -T /usr/bin/codesign -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$CERT_PASSWORD" "$KC" > /dev/null
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
+      - name: Build and sign
+        run: make release VERSION="${GITHUB_REF_NAME#v}" SIGN_KEYCHAIN="$SIGN_KEYCHAIN"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/Mouse.zip \
+            --title "Mouse ${GITHUB_REF_NAME#v}" \
+            --notes "Download **Mouse.zip**, unzip it and move **Mouse.app** to Applications. Installed copies update themselves within a day."
