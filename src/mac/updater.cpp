@@ -8,6 +8,7 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/stat.h>
@@ -201,6 +202,14 @@ int runUpdate() {
     if (!parseRelease(json, rel)) return 1;
     if (compareVersions(rel.version, MOUSE_VERSION) <= 0) return 0;
 
+    // Leftovers of an interrupted earlier update (hidden folders next to the app) go first.
+    if (DIR* d = opendir(parent.c_str())) {
+        while (dirent* e = readdir(d)) {
+            std::string n = e->d_name;
+            if (n.rfind(".Mouse-update-", 0) == 0 || n.rfind(".Mouse-old-", 0) == 0) run({"/bin/rm", "-rf", parent + "/" + n}, nullptr);
+        }
+        closedir(d);
+    }
     std::string stage = parent + "/.Mouse-update-" + std::to_string(getpid());
     run({"/bin/rm", "-rf", stage}, nullptr);
     if (mkdir(stage.c_str(), 0755) != 0) return 1;

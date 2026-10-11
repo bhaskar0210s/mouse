@@ -215,9 +215,7 @@ void Device::readThumbwheel() {
 void Device::apply(const Config& cfg, bool canPost, bool systemNatural) {
     if (!started_) return;
     // Let go of anything synthesised for a held button before its meaning changes.
-    for (int c = 0; c < kControlCount; c++)
-        if (held_[c]) onRelease(static_cast<Control>(c));
-    gesture_.end();
+    releaseAll();
 
     cfg_ = cfg;
     canPost_ = canPost;
@@ -316,8 +314,7 @@ void Device::setReporting(uint16_t cid, bool divert, bool rawXY) {
 
 void Device::restore() {
     if (!started_) return;
-    for (int c = 0; c < kControlCount; c++)
-        if (held_[c]) onRelease(static_cast<Control>(c));
+    releaseAll();
     Report r;
     if (idx_.reprog)
         for (int i = 0; i < kControlCount; i++)
@@ -364,9 +361,20 @@ void Device::handle(const Report& r) {
     }
 }
 
+void Device::releaseAll() {
+    for (int i = 0; i < kControlCount; i++) {
+        if (!held_[i]) continue;
+        held_[i] = false;
+        if (heldAct_[i] == Act::MiddleClick) out_.button(kButtonMiddle, false, 0);
+        else if (heldAct_[i] == Act::CmdClick) out_.button(kButtonLeft, false, kCmd);
+    }
+    gesture_.end();  // a gesture in progress is dropped, never turned into a click
+}
+
+Device::~Device() { releaseAll(); }
+
 void Device::forgetDeviceState() {
-    for (int c = 0; c < kControlCount; c++)
-        if (held_[c]) onRelease(static_cast<Control>(c));
+    releaseAll();
     for (auto& f : reporting_) f = 0xFF;
     for (auto& p : pressed_) p = 0;
     wheelFlags_ = thumbFlags_ = -1;

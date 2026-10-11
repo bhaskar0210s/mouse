@@ -477,3 +477,31 @@ TEST(device_rejects_non_hidpp2) {
     Device d{link, out, 0x01};  // wrong device index: a Bluetooth mouse never answers it
     CHECK(!d.start());
 }
+
+TEST(device_drops_held_gesture_on_reapply_and_releases_on_destroy) {
+    Rig r;
+    r.dev.apply(Config{}, true, true);
+    r.mouse.press(0xC3);  // thumb button held, gesture not finished
+    r.pump();
+    r.dev.invalidate();   // e.g. after sleep
+    r.dev.apply(Config{}, true, true);
+    CHECK(r.out.log.empty());  // no Mission Control out of nowhere
+    r.mouse.release(0xC3);
+    r.pump();
+    CHECK(r.out.log.empty());
+
+    Recorder out;
+    {
+        MXMaster3S m;
+        SimTransport link{m};
+        Device d{link, out};
+        CHECK(d.start());
+        Config c;
+        c.button(Control::Top).act = Act::CmdClick;
+        d.apply(c, true, true);
+        m.press(0xC4);
+        link.pump(d);
+        CHECK_EQ(out.last(), std::string("button 0 down mods=8"));
+    }  // the mouse disappears while the button is held
+    CHECK_EQ(out.last(), std::string("button 0 up mods=8"));
+}

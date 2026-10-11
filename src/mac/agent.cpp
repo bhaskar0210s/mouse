@@ -130,6 +130,7 @@ private:
     void publish();
     void watchSystem();
     void askPermissions();
+    bool missingPermission() const { return !canPost_ || !canListen_ || openDenied_; }
     void updateFinished(int status);
 
     Config cfg_;
@@ -145,6 +146,7 @@ private:
     IONotificationPortRef powerPort_ = nullptr;
     io_object_t powerNotifier_ = 0;
     int notifyToken_ = 0, askToken_ = 0;
+    CFRunLoopTimerRef permissionTimer_ = nullptr;
     std::vector<dispatch_source_t> signals_;
     bool quitting_ = false;
 };
@@ -235,8 +237,11 @@ void Agent::refreshPermissions() {
     if (listenGranted && openDenied_) {
         openDenied_ = false;  // Input Monitoring was just granted: open the mouse again
         hid_.stop();
+        sessions_.clear();  // their links are closed now; the watcher reports the mouse afresh
         hid_.start();
     }
+    if (missingPermission() && permissionTimer_)
+        CFRunLoopTimerSetNextFireDate(permissionTimer_, CFAbsoluteTimeGetCurrent() + 3);
     publish();
 }
 
@@ -266,6 +271,15 @@ void Agent::publish() {
 }
 
 void Agent::startUpdate() {
+    if (updater_ && waitpid(updater_, nullptr, WNOHANG) == updater_) {
+        // The child finished before its exit could be observed: forget it.
+        if (updaterWatch_) {
+            dispatch_source_cancel(updaterWatch_);
+            dispatch_release(updaterWatch_);
+            updaterWatch_ = nullptr;
+        }
+        updater_ = 0;
+    }
     if (updater_ || quitting_ || !cfg_.autoUpdate || !installedForUpdates()) return;
     std::string exe = selfPath();
     if (exe.empty()) return;
@@ -364,10 +378,18 @@ void Agent::watchSystem() {
         },
         CFSTR("SwipeScrollDirectionDidChangeNotification"), nullptr, CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    // Permissions are re-checked every few seconds only while something is missing.
-    every(3, 3, [this] {
-        if (!canPost_ || !canListen_ || openDenied_) refreshPermissions();
-    });
+    // Permissions are re-checked every few seconds while something is missing, hourly otherwise
+    // (a change also arrives as a notification, see above).
+    CFRunLoopTimerContext ctx = {0, this, nullptr, nullptr, nullptr};
+    permissionTimer_ = CFRunLoopTimerCreate(
+        kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 3, 3, 0, 0,
+        [](CFRunLoopTimerRef t, void* self) {
+            auto* a = static_cast<Agent*>(self);
+            if (a->missingPermission()) a->refreshPermissions();
+            if (!a->missingPermission()) CFRunLoopTimerSetNextFireDate(t, CFAbsoluteTimeGetCurrent() + 3600);
+        },
+        &ctx);
+    CFRunLoopAddTimer(CFRunLoopGetMain(), permissionTimer_, kCFRunLoopDefaultMode);
 
     // After sleep the mouse may have forgotten its settings.
     powerPort_ = nullptr;

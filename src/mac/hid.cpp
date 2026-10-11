@@ -188,9 +188,10 @@ void HidWatcher::run() {
 
 void HidWatcher::matched(void* ctx, IOReturn, void*, IOHIDDeviceRef dev) {
     auto* self = static_cast<HidWatcher*>(ctx);
-    // Only interfaces that accept 20-byte HID++ reports are interesting.
+    // Skip interfaces that cannot take even a short HID++ report. (The size may or may not count
+    // the report id byte, so anything that could carry HID++ is tried; a ping decides.)
     int maxOut = intProperty(dev, CFSTR(kIOHIDMaxOutputReportSizeKey));
-    if (maxOut && maxOut < static_cast<int>(hidpp::kLongSize)) return;
+    if (maxOut > 0 && maxOut < 6) return;
     IOReturn r = IOHIDDeviceOpen(dev, kIOHIDOptionsTypeNone);
     if (r != kIOReturnSuccess) {
         int code = static_cast<int>(r);

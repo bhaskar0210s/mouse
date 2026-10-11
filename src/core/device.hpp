@@ -36,6 +36,9 @@ struct DeviceInfo {
 class Device {
 public:
     Device(Transport& transport, Output& output, uint8_t index = hidpp::kDeviceDirect);
+    ~Device();  // lets go of any button it is holding down on the mouse's behalf
+    Device(const Device&) = delete;
+    Device& operator=(const Device&) = delete;
 
     // Talks to the mouse and reads what it can do. False if it does not answer like an MX Master.
     bool start();
@@ -96,6 +99,7 @@ private:
     void onThumbwheel(const hidpp::Report& r);
     void onBattery(const hidpp::Report& r);
     void forgetDeviceState();
+    void releaseAll();
 
     Transport& t_;
     Output& out_;
