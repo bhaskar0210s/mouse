@@ -30,7 +30,10 @@ jobs:
           echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
           security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$CERT_PASSWORD" -T /usr/bin/codesign -f pkcs12
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$CERT_PASSWORD" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/cert.p12"
+          # The certificate is self-signed (not trusted by macOS), which is fine for signing.
+          security find-identity -p codesigning "$KC" | grep -q 36C5521F087DACFB0AE26D2332DC3331BADFB13A
           echo "SIGN_KEYCHAIN=$KC" >> "$GITHUB_ENV"
 
       - name: Build and sign

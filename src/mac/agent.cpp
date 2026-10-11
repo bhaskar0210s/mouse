@@ -509,6 +509,48 @@ const char* featureName(const Device::Indexes& i, uint8_t f) {
 
 // `--probe [seconds]`: diverts every control for a few seconds and prints the raw events, so the
 // directions and controls of a real mouse can be checked. Restores everything afterwards.
+// `--info`: reads the connected mouse (name, battery, features, ranges) without changing anything.
+int info() {
+    static HidWatcher hid;
+    static MacOutput real;
+    static std::shared_ptr<HidLink> link;
+    static std::unique_ptr<HidTransport> transport;
+    static std::unique_ptr<Device> dev;
+    std::printf("Input Monitoring: %s, Accessibility: %s\n", canListen() ? "yes" : "no", canPostEvents() ? "yes" : "no");
+    hid.onOpenFailed = [](int code) {
+        std::printf("cannot open the mouse: 0x%x\n", code);
+        std::exit(2);
+    };
+    hid.onArrive = [](std::shared_ptr<HidLink> l) {
+        if (dev) return;
+        link = l;
+        transport = std::make_unique<HidTransport>(l);
+        dev = std::make_unique<Device>(*transport, real);
+        if (!dev->start()) {
+            std::printf("%s (0x%04x): no HID++ answer\n", l->product.c_str(), l->productId);
+            dev.reset();
+            return;
+        }
+        const auto& i = dev->info();
+        const auto& x = dev->indexes();
+        std::printf("%s (0x%04x)\nname: %s\nbattery: %d%%%s\ndpi: %d (%d..%d step %d)\n"
+                    "wheel multiplier: %d\nthumb wheel resolution: %d%s\n"
+                    "feature indexes: name %d battery %d buttons %d connection %d wheelmode %d%s wheel %d thumbwheel %d dpi %d\n",
+                    l->product.c_str(), l->productId, i.name.c_str(), i.battery, i.charging ? " (charging)" : "", i.dpi,
+                    i.dpiMin, i.dpiMax, i.dpiStep, i.wheelMultiplier, i.thumbResolution,
+                    i.thumbReversedByDefault ? " (reversed by default)" : "", x.name, x.battery, x.reprog, x.wireless,
+                    x.smartShift, x.smartShiftEnhanced ? " (enhanced)" : "", x.hiRes, x.thumb, x.dpi);
+        std::exit(0);
+    };
+    if (!hid.start()) return 1;
+    after(8, [] {
+        std::printf("no MX Master 3S answered (move it to wake it up)\n");
+        std::exit(1);
+    });
+    CFRunLoopRun();
+    return 0;
+}
+
 int probe(double seconds) {
     static HidWatcher hid;
     static MacOutput real;
@@ -626,3 +668,5 @@ int runProbe(int argc, char** argv) {
 }
 
 int runUpdateCheck() { return mouse::mac::runUpdate(); }
+
+int runInfo() { return mouse::mac::info(); }
