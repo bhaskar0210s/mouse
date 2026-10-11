@@ -50,7 +50,8 @@ bool Device::request(uint8_t fi, uint8_t fn, std::initializer_list<uint8_t> para
     size_t n = 0;
     for (uint8_t v : params)
         if (n < kParamSize) buf[n++] = v;
-    Report req = makeRequest(index_, fi, fn, buf, n);
+    Report req = makeRequest(index_, fi, fn, buf, n, nextSoftwareId_);
+    nextSoftwareId_ = static_cast<uint8_t>(nextSoftwareId_ % 15 + 1);
     if (!t_.write(req)) {
         lastError_ = -1;
         return false;
@@ -62,6 +63,8 @@ bool Device::request(uint8_t fi, uint8_t fn, std::initializer_list<uint8_t> para
         Report in;
         if (left <= 0 || !t_.read(in, static_cast<int>(left))) {
             lastError_ = -2;
+            // The mouse may still have acted on it: our idea of its state is no longer reliable.
+            if (started_) reapply_ = true;
             return false;
         }
         if (isReplyTo(in, req)) {
@@ -319,12 +322,13 @@ void Device::restore() {
     if (idx_.reprog)
         for (int i = 0; i < kControlCount; i++)
             if (reporting_[i] != 0) setReporting(kCids[i], false, false);
-    if (idx_.hiRes && wheelFlags_ != -1 && (wheelFlags_ & (kWheelDivert | kWheelHiRes))) {
-        int flags = wheelFlags_ & kWheelInvert;
+    // The wheels go back to the firmware even if we are unsure what they are set to now.
+    if (idx_.hiRes && (wheelFlags_ == -1 || (wheelFlags_ & (kWheelDivert | kWheelHiRes)))) {
+        int flags = wheelFlags_ != -1 ? (wheelFlags_ & kWheelInvert) : 0;
         if (applied_) flags = (wheelInvertable_ && cfg_.naturalScroll != systemNatural_) ? kWheelInvert : 0;
         wheelFlags_ = request(idx_.hiRes, 2, {static_cast<uint8_t>(flags)}, &r) ? flags : -1;
     }
-    if (idx_.thumb && thumbFlags_ != -1 && (thumbFlags_ & 1)) {
+    if (idx_.thumb && (thumbFlags_ == -1 || (thumbFlags_ & 1))) {
         bool invert = applied_ && cfg_.thumbInverted;
         thumbFlags_ = request(idx_.thumb, 2, {0, static_cast<uint8_t>(invert)}, &r) ? (invert ? 2 : 0) : -1;
     }

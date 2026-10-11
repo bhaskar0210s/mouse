@@ -505,3 +505,40 @@ TEST(device_drops_held_gesture_on_reapply_and_releases_on_destroy) {
     }  // the mouse disappears while the button is held
     CHECK_EQ(out.last(), std::string("button 0 up mods=8"));
 }
+
+TEST(device_ignores_a_late_reply_to_an_earlier_request) {
+    MXMaster3S m;
+    m.delayReplyOf = 3;  // Root.getFeature(battery) answers one request too late
+    SimTransport link{m};
+    Recorder out;
+    Device d{link, out};
+    CHECK(d.start());
+    const auto& i = d.indexes();
+    CHECK_EQ(int(i.battery), 0);  // that one timed out
+    CHECK_EQ(int(i.reprog), 9);   // but nothing after it shifted
+    CHECK_EQ(int(i.wireless), 4);
+    CHECK_EQ(int(i.dpi), 13);
+    CHECK_EQ(int(i.hiRes), 15);
+    CHECK_EQ(int(i.thumb), 16);
+}
+
+TEST(device_recovers_from_a_lost_reply) {
+    Rig r;
+    r.mouse.loseReplyFeature = 0x2121;  // setWheelMode is carried out, its reply never comes
+    r.mouse.loseReplyFunction = 2;
+    Config c;
+    r.dev.apply(c, true, true);
+    CHECK_EQ(int(r.mouse.wheelMode), 0x03);  // the mouse did divert the wheel
+    CHECK(r.dev.needsReapply());             // and we know we are unsure
+    r.dev.apply(c, true, true);              // what the agent does next
+    r.mouse.turnWheel(1);
+    r.pump();
+    CHECK(r.out.scrollEvents > 0);  // scrolling works again
+    // Quitting hands the wheel back even when its state is unknown.
+    r.mouse.loseReplyFeature = 0x2121;
+    r.mouse.loseReplyFunction = 2;
+    r.dev.invalidate();
+    r.dev.apply(c, true, true);
+    r.dev.restore();
+    CHECK_EQ(int(r.mouse.wheelMode), 0);
+}

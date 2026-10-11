@@ -55,9 +55,13 @@ public:
     bool silent = false;          // never answer (asleep / out of range)
     int failNextRequests = 0;     // answer the next N requests with HID++ "busy"
     uint16_t brokenFeature = 0;   // requests to this feature id answer with "hardware error"
+    int delayReplyOf = 0;         // the reply to this request number (1-based) arrives one request late
+    uint16_t loseReplyFeature = 0;  // the next request to this feature/function is carried out, reply lost
+    int loseReplyFunction = -1;
     int requestCount = 0;
 
 private:
+    void handleRequest(const hidpp::Report& req);
     void reply(const hidpp::Report& req, std::initializer_list<uint8_t> params);
     void error(const hidpp::Report& req, uint8_t code);
     void event(uint8_t featureIndex, uint8_t ev, std::initializer_list<uint8_t> params);
@@ -67,6 +71,7 @@ private:
 
     std::vector<uint16_t> held_;
     uint16_t ts_ = 0;
+    std::deque<hidpp::Report> late_;
 };
 
 // Transport that talks to a simulated mouse in-process.

@@ -145,7 +145,7 @@ private:
     io_connect_t power_ = 0;
     IONotificationPortRef powerPort_ = nullptr;
     io_object_t powerNotifier_ = 0;
-    int notifyToken_ = 0, askToken_ = 0;
+    int notifyToken_ = 0, askToken_ = 0, reapplyToken_ = 0;
     CFRunLoopTimerRef permissionTimer_ = nullptr;
     std::vector<dispatch_source_t> signals_;
     bool quitting_ = false;
@@ -166,13 +166,23 @@ void Agent::arrive(const std::shared_ptr<HidLink>& link) {
     tryStart(key);
 }
 
+// Handle what arrived during requests; if that asked for it (e.g. the mouse said it reconnected),
+// configure again right away so no later press or wheel turn is lost.
+static void settle(Device& d, const Config& cfg, bool canPost, bool natural) {
+    for (int round = 0; round < 3; round++) {
+        d.processPending();
+        if (!d.needsReapply()) return;
+        d.apply(cfg, canPost, natural);
+    }
+}
+
 void Agent::tryStart(HidLink* key) {
     for (auto& s : sessions_) {
         if (s->link.get() != key) continue;
         if (s->device->started()) return;
         if (s->device->start()) {
             s->device->apply(cfg_, canPost_, natural_);
-            s->device->processPending();
+            settle(*s->device, cfg_, canPost_, natural_);
             os_log(gLog, "mouse ready: dpi %d, battery %d", s->device->info().dpi, s->device->info().battery);
             publish();
         } else if (++s->attempts < 4) {
@@ -201,10 +211,7 @@ void Agent::reports() {
             s->device->handle(r);
             s->device->processPending();
         }
-        if (s->device->started() && s->device->needsReapply()) {
-            s->device->apply(cfg_, canPost_, natural_);
-            s->device->processPending();
-        }
+        if (s->device->started()) settle(*s->device, cfg_, canPost_, natural_);
     }
 }
 
@@ -213,7 +220,7 @@ void Agent::applyAll(bool force) {
         if (!s->device->started()) continue;
         if (force) s->device->invalidate();
         s->device->apply(cfg_, canPost_, natural_);
-        s->device->processPending();
+        settle(*s->device, cfg_, canPost_, natural_);
     }
     publish();
 }
@@ -271,14 +278,16 @@ void Agent::publish() {
 }
 
 void Agent::startUpdate() {
-    if (updater_ && waitpid(updater_, nullptr, WNOHANG) == updater_) {
-        // The child finished before its exit could be observed: forget it.
+    int status = 0;
+    if (updater_ && waitpid(updater_, &status, WNOHANG) == updater_) {
+        // The child finished before its exit could be observed: handle it now.
         if (updaterWatch_) {
             dispatch_source_cancel(updaterWatch_);
             dispatch_release(updaterWatch_);
             updaterWatch_ = nullptr;
         }
         updater_ = 0;
+        updateFinished(WIFEXITED(status) ? WEXITSTATUS(status) : -1);
     }
     if (updater_ || quitting_ || !cfg_.autoUpdate || !installedForUpdates()) return;
     std::string exe = selfPath();
@@ -297,14 +306,14 @@ void Agent::startUpdate() {
     updaterWatch_ = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, static_cast<uintptr_t>(pid), DISPATCH_PROC_EXIT,
                                            dispatch_get_main_queue());
     dispatch_source_set_event_handler(updaterWatch_, ^{
-        int status = 0;
+        int exitStatus = 0;
         pid_t p = updater_;
-        waitpid(p, &status, 0);
+        if (p == 0 || waitpid(p, &exitStatus, 0) != p) return;  // already handled in startUpdate()
         dispatch_source_cancel(updaterWatch_);
         dispatch_release(updaterWatch_);
         updaterWatch_ = nullptr;
         updater_ = 0;
-        updateFinished(WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+        updateFinished(WIFEXITED(exitStatus) ? WEXITSTATUS(exitStatus) : -1);
     });
     dispatch_resume(updaterWatch_);
 }
@@ -354,6 +363,10 @@ void Agent::watchSystem() {
     // Settings saved by the window.
     notify_register_dispatch(kConfigChanged, &notifyToken_, dispatch_get_main_queue(), ^(int) {
         reloadConfig();
+    });
+    // `MouseAgent --probe` reconfigured the mouse behind our back.
+    notify_register_dispatch(kReapply, &reapplyToken_, dispatch_get_main_queue(), ^(int) {
+        applyAll(true);
     });
     // "Allow…" in the window: the system prompts have to come from the agent, which needs them.
     notify_register_dispatch(kAskPermission, &askToken_, dispatch_get_main_queue(), ^(int) {
@@ -629,6 +642,7 @@ int probe(double seconds) {
         std::fflush(stdout);
         after(seconds, [] {
             dev->restore();
+            postNotification(kReapply);  // the background agent sets everything up again
             std::printf("\nrestored the mouse\n");
             std::exit(0);
         });

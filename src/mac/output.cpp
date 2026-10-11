@@ -86,31 +86,45 @@ void MacOutput::post(uint32_t type, uint16_t key, uint32_t flags) {
     ev.key.keyCode = key;
     ev.key.origCharSet = ev.key.charSet = NX_ASCIISET;
     IOGPoint loc = {0, 0};
-    if (IOHIDPostEvent(hid_, type, loc, &ev, kNXEventDataVersion, flags, kIOHIDSetGlobalEventFlags) != KERN_SUCCESS) {
+    IOOptionBits options = kIOHIDSetGlobalEventFlags;
+    if (IOHIDPostEvent(hid_, type, loc, &ev, kNXEventDataVersion, flags, options) != KERN_SUCCESS) {
         // The connection can go stale (e.g. after the HID system restarts); retry once.
         IOServiceClose(hid_);
         hid_ = 0;
-        if (connect()) IOHIDPostEvent(hid_, type, loc, &ev, kNXEventDataVersion, flags, kIOHIDSetGlobalEventFlags);
+        if (connect()) IOHIDPostEvent(hid_, type, loc, &ev, kNXEventDataVersion, flags, options);
     }
 }
 
 void MacOutput::key(const Shortcut& s) {
     if (!s.valid()) return;
-    uint32_t flags = 0;
+    // Modifiers that are down right now (keys the user is holding, Caps Lock) are restored after
+    // the shortcut, which itself is sent with exactly its own modifiers.
+    constexpr uint32_t kHeld = NX_ALPHASHIFTMASK | NX_SHIFTMASK | NX_CONTROLMASK | NX_ALTERNATEMASK | NX_COMMANDMASK |
+                               NX_SECONDARYFNMASK | NX_DEVICELCTLKEYMASK | NX_DEVICELSHIFTKEYMASK |
+                               NX_DEVICERSHIFTKEYMASK | NX_DEVICELCMDKEYMASK | NX_DEVICERCMDKEYMASK |
+                               NX_DEVICELALTKEYMASK | NX_DEVICERALTKEYMASK | NX_DEVICERCTLKEYMASK;
+    uint32_t before = static_cast<uint32_t>(CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState)) & kHeld;
+    uint32_t flags = before & NX_ALPHASHIFTMASK;
+    uint16_t lastModifier = 0;
     for (const auto& m : kModifiers) {
         if (!(s.mods & m.bit)) continue;
         flags |= m.nx | m.device;
         post(NX_FLAGSCHANGED, m.key, flags);
+        lastModifier = m.key;
     }
     uint32_t keyFlags = flags | extraFlags(s.key) | ((s.mods & kFn) ? NX_SECONDARYFNMASK : 0);
     post(NX_KEYDOWN, s.key, keyFlags);
     post(NX_KEYUP, s.key, keyFlags);
+    uint32_t now = keyFlags;
     for (int i = 3; i >= 0; i--) {
         const auto& m = kModifiers[i];
         if (!(s.mods & m.bit)) continue;
         flags &= ~(m.nx | m.device);
         post(NX_FLAGSCHANGED, m.key, flags);
+        now = flags;
     }
+    // Leave the system exactly as it was (no Fn left over from an arrow key, held keys kept).
+    if (now != before) post(NX_FLAGSCHANGED, lastModifier ? lastModifier : 0x3F, before);
 }
 
 void MacOutput::dictation() {

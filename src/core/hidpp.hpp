@@ -12,7 +12,7 @@ constexpr uint8_t kReportLong = 0x11;    // 20 bytes (the only one Bluetooth mic
 constexpr size_t kLongSize = 20;
 constexpr size_t kParamSize = 16;
 constexpr uint8_t kDeviceDirect = 0xFF;  // device index of a mouse paired over Bluetooth
-constexpr uint8_t kSoftwareId = 0x0D;    // identifies our requests' replies
+constexpr uint8_t kSoftwareId = 0x0D;    // default software id of our requests (never 0: that marks notifications)
 constexpr uint8_t kErrorFeature = 0xFF;  // HID++ 2.0 error reply marker
 constexpr uint8_t kError10 = 0x8F;       // HID++ 1.0 error reply marker
 
@@ -89,12 +89,12 @@ struct Report {
 
 // Builds a long request report.
 inline Report makeRequest(uint8_t device, uint8_t featureIndex, uint8_t function, const uint8_t* params,
-                          size_t count) {
+                          size_t count, uint8_t softwareId = kSoftwareId) {
     Report r;
     r.b[0] = kReportLong;
     r.b[1] = device;
     r.b[2] = featureIndex;
-    r.b[3] = static_cast<uint8_t>((function & 0x0F) << 4 | kSoftwareId);
+    r.b[3] = static_cast<uint8_t>((function & 0x0F) << 4 | ((softwareId & 0x0F) ? (softwareId & 0x0F) : kSoftwareId));
     if (params && count) std::memcpy(r.b + 4, params, count > kParamSize ? kParamSize : count);
     return r;
 }

@@ -1,5 +1,5 @@
 APP       := Mouse
-VERSION   := 1.0.1
+VERSION   := 1.0.2
 BUILD     := build
 BUNDLE    := $(BUILD)/$(APP).app
 BINARY    := $(BUNDLE)/Contents/MacOS/$(APP)

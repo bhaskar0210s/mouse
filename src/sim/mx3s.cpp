@@ -95,6 +95,23 @@ void MXMaster3S::event(uint8_t fi, uint8_t ev, std::initializer_list<uint8_t> pa
 void MXMaster3S::receive(const Report& req) {
     requestCount++;
     if (silent) return;
+    // A reply held back from the previous request shows up now, before this one is answered.
+    while (!late_.empty()) {
+        outbox.push_back(late_.front());
+        late_.pop_front();
+    }
+    size_t before = outbox.size();
+    handleRequest(req);
+    bool lose = loseReplyFeature && featureAt(req.feature()) == loseReplyFeature &&
+                (loseReplyFunction < 0 || req.function() == loseReplyFunction);
+    if (lose) loseReplyFeature = 0;
+    if ((lose || requestCount == delayReplyOf) && outbox.size() > before) {
+        if (!lose) late_.push_back(outbox.back());
+        outbox.pop_back();
+    }
+}
+
+void MXMaster3S::handleRequest(const Report& req) {
     if (req.id() != kReportLong || req.device() != kDeviceDirect) return;  // Bluetooth: long reports only
     if (failNextRequests > 0) {
         failNextRequests--;

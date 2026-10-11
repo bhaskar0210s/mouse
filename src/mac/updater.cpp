@@ -10,6 +10,8 @@
 #include <Security/Security.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <sys/file.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -202,11 +204,26 @@ int runUpdate() {
     if (!parseRelease(json, rel)) return 1;
     if (compareVersions(rel.version, MOUSE_VERSION) <= 0) return 0;
 
-    // Leftovers of an interrupted earlier update (hidden folders next to the app) go first.
+    // One update at a time (the agent's own check and a manual `--update` could overlap).
+    std::string lockPath = dataDir() + "/update.lock";
+    writeFileAtomic(lockPath + ".init", "");  // makes sure the folder exists
+    unlink((lockPath + ".init").c_str());
+    int lock = open(lockPath.c_str(), O_RDWR | O_CREAT, 0644);
+    if (lock < 0 || flock(lock, LOCK_EX | LOCK_NB) != 0) {
+        if (lock >= 0) close(lock);
+        return 0;
+    }
+    // Leftovers of an interrupted earlier update (hidden folders next to the app) go first, but
+    // never a folder of an update that is still running, and never the only copy of the app.
     if (DIR* d = opendir(parent.c_str())) {
         while (dirent* e = readdir(d)) {
             std::string n = e->d_name;
-            if (n.rfind(".Mouse-update-", 0) == 0 || n.rfind(".Mouse-old-", 0) == 0) run({"/bin/rm", "-rf", parent + "/" + n}, nullptr);
+            bool stage = n.rfind(".Mouse-update-", 0) == 0, old = n.rfind(".Mouse-old-", 0) == 0;
+            if (!stage && !old) continue;
+            pid_t owner = static_cast<pid_t>(std::atoi(n.c_str() + (stage ? 14 : 11)));
+            if (owner > 0 && owner != getpid() && kill(owner, 0) == 0) continue;
+            if (old && access(app.c_str(), F_OK) != 0) continue;
+            run({"/bin/rm", "-rf", parent + "/" + n}, nullptr);
         }
         closedir(d);
     }
@@ -232,7 +249,9 @@ int runUpdate() {
     std::string old = parent + "/.Mouse-old-" + std::to_string(getpid()) + ".app";
     if (rename(app.c_str(), old.c_str()) != 0) return fail();
     if (rename(fresh.c_str(), app.c_str()) != 0) {
-        rename(old.c_str(), app.c_str());
+        // Put the running version back. If even that fails, keep the old copy where it is
+        // (a later update will not delete it while Mouse.app is missing).
+        if (rename(old.c_str(), app.c_str()) != 0) return 1;
         return fail();
     }
     run({"/bin/rm", "-rf", old}, nullptr);

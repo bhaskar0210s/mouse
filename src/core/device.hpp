@@ -107,6 +107,7 @@ private:
     bool started_ = false;
     bool reapply_ = false;
     int lastError_ = 0;
+    uint8_t nextSoftwareId_ = 1;  // rotates 1..15 so a late reply never answers a newer request
     Indexes idx_;
     DeviceInfo info_;
     std::deque<hidpp::Report> pending_;
