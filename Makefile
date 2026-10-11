@@ -40,8 +40,7 @@ TEST_OBJ  := $(TEST_SRC:tests/%.cpp=$(BUILD)/test/%.o) $(patsubst src/%.cpp,$(BU
 TEST_BIN  := $(BUILD)/mouse-tests
 
 ICON      := resources/$(APP).icns
-RESOURCES := $(BUNDLE)/Contents/Info.plist $(BUNDLE)/Contents/Library/LaunchAgents/app.mouse.agent.plist \
-             $(HELPER)/Contents/Info.plist \
+RESOURCES := $(BUNDLE)/Contents/Info.plist $(HELPER)/Contents/Info.plist \
              $(if $(wildcard $(ICON)),$(BUNDLE)/Contents/Resources/$(APP).icns $(HELPER)/Contents/Resources/$(APP).icns)
 SIGN      = codesign --force --sign "$(SIGN_ID)" $(if $(SIGN_KEYCHAIN),--keychain "$(SIGN_KEYCHAIN)") --timestamp=none
 
@@ -75,10 +74,6 @@ $(BUNDLE)/Contents/Info.plist: resources/Info.plist Makefile
 $(HELPER)/Contents/Info.plist: resources/AgentInfo.plist Makefile
 	@mkdir -p $(@D)
 	@sed 's/__VERSION__/$(VERSION)/g' $< > $@
-
-$(BUNDLE)/Contents/Library/LaunchAgents/app.mouse.agent.plist: resources/app.mouse.agent.plist
-	@mkdir -p $(@D)
-	@cp $< $@
 
 $(BUNDLE)/Contents/Resources/$(APP).icns $(HELPER)/Contents/Resources/$(APP).icns: $(ICON)
 	@mkdir -p $(@D)
@@ -122,6 +117,7 @@ install: app
 
 uninstall:
 	@launchctl bootout gui/$$(id -u)/app.mouse.agent 2>/dev/null || true
+	@rm -f ~/Library/LaunchAgents/app.mouse.agent.plist
 	@pkill -x $(APP) || true
 	@pkill -x MouseAgent || true
 	@rm -rf "$(PREFIX)/$(APP).app"

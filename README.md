@@ -75,6 +75,7 @@ make snapshot
 
 ```sh
 launchctl bootout gui/$(id -u)/app.mouse.agent
+rm -f ~/Library/LaunchAgents/app.mouse.agent.plist
 rm -rf /Applications/Mouse.app ~/Library/Application\ Support/Mouse
 ```
 

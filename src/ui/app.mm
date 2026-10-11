@@ -23,6 +23,7 @@ int runSettingsWindow(int argc, char** argv);
 @implementation MAppDelegate {
     int _stateToken;
     BOOL _registeredToken;
+    BOOL _agentRefused;
     id _activeObserver;
 }
 
@@ -88,20 +89,100 @@ static BOOL installedInApplications() {
     return [path hasPrefix:@"/Applications/"] || [path hasPrefix:user];
 }
 
+// The background agent runs as a classic per-user LaunchAgent pointing into this bundle. (A
+// ServiceManagement registration would pin the agent to its exact code hash, because the app
+// has no Team ID, and launchd would then refuse to start it after every automatic update.)
+static NSString* agentPlistPath() {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/LaunchAgents/app.mouse.agent.plist"];
+}
+
+static NSDictionary* agentPlist() {
+    NSString* program = [NSBundle.mainBundle.bundlePath
+        stringByAppendingPathComponent:@"Contents/Helpers/MouseAgent.app/Contents/MacOS/MouseAgent"];
+    return @{
+        @"Label" : @"app.mouse.agent",
+        @"Program" : program,
+        @"AssociatedBundleIdentifiers" : @[ @"app.mouse.Mouse" ],
+        @"RunAtLoad" : @YES,
+        @"KeepAlive" : @YES,
+        @"ProcessType" : @"Interactive",
+        @"LimitLoadToSessionType" : @"Aqua",
+    };
+}
+
+static int launchctl(NSArray<NSString*>* args) {
+    NSTask* task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:@"/bin/launchctl"];
+    task.arguments = args;
+    task.standardOutput = NSFileHandle.fileHandleWithNullDevice;
+    task.standardError = NSFileHandle.fileHandleWithNullDevice;
+    NSError* error = nil;
+    if (![task launchAndReturnError:&error]) return -1;
+    [task waitUntilExit];
+    return task.terminationStatus;
+}
+
+// Installs (or repairs) the LaunchAgent and makes sure it is loaded. Returns NO if macOS refused
+// to load it, which happens when Mouse is switched off in Login Items.
+static BOOL installAgent(BOOL restart) {
+    NSString* domain = [NSString stringWithFormat:@"gui/%u", getuid()];
+    NSString* service = [domain stringByAppendingString:@"/app.mouse.agent"];
+    // Older builds registered through ServiceManagement: retire that registration.
+    SMAppService* svc = [SMAppService agentServiceWithPlistName:@"app.mouse.agent.plist"];
+    if (svc.status != SMAppServiceStatusNotRegistered) [svc unregisterAndReturnError:nil];
+
+    NSString* path = agentPlistPath();
+    NSDictionary* want = agentPlist();
+    NSDictionary* have = [NSDictionary dictionaryWithContentsOfFile:path];
+    BOOL changed = ![have isEqualToDictionary:want];
+    if (changed) {
+        [NSFileManager.defaultManager createDirectoryAtPath:path.stringByDeletingLastPathComponent
+                                withIntermediateDirectories:YES
+                                                 attributes:nil
+                                                      error:nil];
+        if (![want writeToURL:[NSURL fileURLWithPath:path] error:nil]) return NO;
+    }
+    BOOL loaded = launchctl(@[ @"print", service ]) == 0;
+    if (loaded && (changed || restart)) {
+        launchctl(@[ @"bootout", service ]);
+        loaded = NO;
+    }
+    if (!loaded && launchctl(@[ @"bootstrap", domain, path ]) != 0) return NO;
+    return YES;
+}
+
+// `Mouse --register-agent [--force]`: installs the LaunchAgent without showing any UI;
+// --force reloads it even if nothing changed.
+int registerAgentHeadless(bool force) {
+    @autoreleasepool {
+        if (!installedInApplications()) {
+            fprintf(stderr, "Mouse: not in Applications, not installing the agent\n");
+            return 2;
+        }
+        return installAgent(force) ? 0 : 1;
+    }
+}
+
+int unregisterAgentHeadless() {
+    @autoreleasepool {
+        launchctl(@[ @"bootout", [NSString stringWithFormat:@"gui/%u/app.mouse.agent", getuid()] ]);
+        [NSFileManager.defaultManager removeItemAtPath:agentPlistPath() error:nil];
+        SMAppService* svc = [SMAppService agentServiceWithPlistName:@"app.mouse.agent.plist"];
+        if (svc.status != SMAppServiceStatusNotRegistered) [svc unregisterAndReturnError:nil];
+        return 0;
+    }
+}
+
 - (void)registerAgent {
     if (!installedInApplications()) return;  // never from a build directory
-    SMAppService* svc = [SMAppService agentServiceWithPlistName:@"app.mouse.agent.plist"];
-    if (svc.status != SMAppServiceStatusEnabled) {
-        NSError* error = nil;
-        if (![svc registerAndReturnError:&error]) NSLog(@"Mouse: could not register the background agent: %@", error);
-    }
-    [self updateLoginNote];
+    _agentRefused = !installAgent(NO);
+    _settings.needsLoginApproval = _agentRefused;
 }
 
 - (void)updateLoginNote {
     if (!installedInApplications()) return;
-    SMAppService* svc = [SMAppService agentServiceWithPlistName:@"app.mouse.agent.plist"];
-    _settings.needsLoginApproval = svc.status == SMAppServiceStatusRequiresApproval;
+    if (_agentRefused) _agentRefused = !installAgent(NO);  // maybe switched on in Login Items meanwhile
+    _settings.needsLoginApproval = _agentRefused;
 }
 
 // ---------------------------------------------------------------------------- menu
