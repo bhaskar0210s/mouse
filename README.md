@@ -33,11 +33,12 @@ thumb-button gestures, pointer speed and scrolling without Logi Options+.
    ```sh
    xattr -dr com.apple.quarantine /Applications/Mouse.app
    ```
-3. Click **Allow…** in the window and turn on **Mouse** under Accessibility (and Input
-   Monitoring if asked). Mouse needs these to talk to your mouse and to perform button actions.
+3. Click **Allow…** in the window and turn on **MouseAgent** in **Privacy & Security →
+   Accessibility** and **Input Monitoring**. The agent is the small background part of Mouse:
+   it needs these to talk to your mouse and to perform button actions.
 
-Mouse starts at login in the background. Open the app whenever you want to change something.
-Closing the window quits the settings window, but the background part keeps running.
+MouseAgent starts at login. Open Mouse whenever you want to change something: closing the
+window quits it, while MouseAgent keeps running in the background.
 
 If Logi Options+ is installed, quit it first so the two don't fight over the mouse.
 
@@ -58,14 +59,14 @@ The code is C++20 with a thin AppKit layer and no third-party dependencies:
 
 - `src/core`: settings, the HID++ 2.0 protocol, device logic, gestures and scrolling (portable, tested)
 - `src/sim`: a simulated MX Master 3S used by the tests
-- `src/mac`: the background agent, IOKit HID access, event output and the updater
-- `src/ui`: the settings window
+- `src/mac`: MouseAgent (the background agent: IOKit HID access, event output, updater)
+- `src/ui`: the settings window (Mouse.app; quits when closed)
 
 Useful commands:
 
 ```sh
 # Show what the mouse reports for 15 seconds (buttons, wheels, battery)
-/Applications/Mouse.app/Contents/MacOS/Mouse --probe
+/Applications/Mouse.app/Contents/Helpers/MouseAgent.app/Contents/MacOS/MouseAgent --probe
 # Render the settings window to PNG files
 make snapshot
 ```
