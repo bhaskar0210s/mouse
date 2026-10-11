@@ -1,7 +1,6 @@
 // Settings window process: opened from Finder or Spotlight to change settings, quits when the
 // window closes. Also renders the documentation snapshots (--snapshot <dir>).
 #import <AppKit/AppKit.h>
-#import <ServiceManagement/ServiceManagement.h>
 
 #include <notify.h>
 
@@ -41,7 +40,8 @@ int runSettingsWindow(int argc, char** argv);
         [NSWorkspace.sharedWorkspace openURL:url];
     };
     _settings.onOpenLoginItems = ^{
-        [SMAppService openSystemSettingsLoginItems];
+        NSURL* url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.LoginItems-Settings.extension"];
+        [NSWorkspace.sharedWorkspace openURL:url];
     };
 
     __weak MSettings* weakSettings = _settings;
@@ -60,8 +60,7 @@ int runSettingsWindow(int argc, char** argv);
                                                                   }];
 
     [_settings.window makeKeyAndOrderFront:nil];
-    if (@available(macOS 14.0, *)) [NSApp activate];
-    else [NSApp activateIgnoringOtherApps:YES];
+    [NSApp activate];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)app { return YES; }
@@ -127,10 +126,6 @@ static int launchctl(NSArray<NSString*>* args) {
 static BOOL installAgent(BOOL restart) {
     NSString* domain = [NSString stringWithFormat:@"gui/%u", getuid()];
     NSString* service = [domain stringByAppendingString:@"/app.mouse.agent"];
-    // Older builds registered through ServiceManagement: retire that registration.
-    SMAppService* svc = [SMAppService agentServiceWithPlistName:@"app.mouse.agent.plist"];
-    if (svc.status != SMAppServiceStatusNotRegistered) [svc unregisterAndReturnError:nil];
-
     NSString* path = agentPlistPath();
     NSDictionary* want = agentPlist();
     NSDictionary* have = [NSDictionary dictionaryWithContentsOfFile:path];
@@ -167,8 +162,6 @@ int unregisterAgentHeadless() {
     @autoreleasepool {
         launchctl(@[ @"bootout", [NSString stringWithFormat:@"gui/%u/app.mouse.agent", getuid()] ]);
         [NSFileManager.defaultManager removeItemAtPath:agentPlistPath() error:nil];
-        SMAppService* svc = [SMAppService agentServiceWithPlistName:@"app.mouse.agent.plist"];
-        if (svc.status != SMAppServiceStatusNotRegistered) [svc unregisterAndReturnError:nil];
         return 0;
     }
 }
@@ -183,6 +176,8 @@ int unregisterAgentHeadless() {
     if (!installedInApplications()) return;
     if (_agentRefused) _agentRefused = !installAgent(NO);  // maybe switched on in Login Items meanwhile
     _settings.needsLoginApproval = _agentRefused;
+    // Perhaps back from System Settings: have the agent look at its permissions again.
+    if (_settings.needsPermission) mouse::postNotification(mouse::kRecheck);
 }
 
 // ---------------------------------------------------------------------------- menu

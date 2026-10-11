@@ -9,7 +9,7 @@
 	<key>CFBundleExecutable</key>
 	<string>MouseAgent</string>
 	<key>CFBundleIconFile</key>
-	<string>Mouse</string>
+	<string>MouseAgent</string>
 	<key>CFBundleIdentifier</key>
 	<string>app.mouse.agent</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -25,7 +25,7 @@
 	<key>LSBackgroundOnly</key>
 	<true/>
 	<key>LSMinimumSystemVersion</key>
-	<string>13.0</string>
+	<string>27.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Free and open source under the MIT License.</string>
 </dict>

@@ -11,6 +11,7 @@ constexpr const char* kConfigChanged = "app.mouse.config";  // window -> agent
 constexpr const char* kStateChanged = "app.mouse.state";    // agent -> window
 constexpr const char* kAskPermission = "app.mouse.permissions";  // window -> agent: show the system prompts
 constexpr const char* kReapply = "app.mouse.reapply";  // diagnostics -> agent: send every setting to the mouse again
+constexpr const char* kRecheck = "app.mouse.recheck";  // window -> agent: look at the permissions again
 
 // ~/Library/Application Support/Mouse (or $MOUSE_DIR, used by tests).
 std::string dataDir();

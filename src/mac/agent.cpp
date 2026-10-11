@@ -1,66 +1,69 @@
 // The background agent: keeps the MX Master 3S configured and turns its buttons into actions.
 //
-//   Mouse --agent                     normal operation (started by launchd)
-//   Mouse --agent --simulate <file>   drive a simulated mouse from a script, with real output
-//   Mouse --probe [seconds]           print what the connected mouse reports (diagnostics)
-//   Mouse --update                    check for and install an update (spawned by the agent)
-#include <ApplicationServices/ApplicationServices.h>
+//   MouseAgent                   normal operation (started by launchd)
+//   MouseAgent --info            read the connected mouse without changing anything
+//   MouseAgent --probe [secs]    print what the connected mouse reports (diagnostics)
+//   MouseAgent --update          check for and install an update (spawned by the agent)
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOMessage.h>
 #include <IOKit/hidsystem/IOHIDLib.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #include <dispatch/dispatch.h>
 #include <libproc.h>
+#include <malloc/malloc.h>
 #include <notify.h>
 #include <os/log.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
+#include <ctime>
 #include <functional>
 #include <memory>
-#include <sstream>
 #include <vector>
 
 #include "core/device.hpp"
 #include "core/store.hpp"
 #include "mac/hid.hpp"
 #include "mac/output.hpp"
+#include "mac/system.hpp"
 #include "mac/updater.hpp"
-#include "sim/mx3s.hpp"
 
 extern char** environ;
 
 namespace mouse::mac {
 namespace {
 
-bool systemNaturalScrolling() {
-    CFPreferencesAppSynchronize(kCFPreferencesAnyApplication);
-    CFPropertyListRef v = CFPreferencesCopyAppValue(CFSTR("com.apple.swipescrolldirection"), kCFPreferencesAnyApplication);
-    bool natural = true;  // the macOS default
-    if (v) {
-        if (CFGetTypeID(v) == CFBooleanGetTypeID()) {
-            natural = CFBooleanGetValue(static_cast<CFBooleanRef>(v));
-        } else if (CFGetTypeID(v) == CFNumberGetTypeID()) {
-            int n = 1;
-            CFNumberGetValue(static_cast<CFNumberRef>(v), kCFNumberIntType, &n);
-            natural = n != 0;
-        }
-        CFRelease(v);
-    }
-    return natural;
+constexpr const char* kLabel = "app.mouse.agent";  // the launchd job (written by src/ui/app.mm)
+
+// Started by launchd as our job, not from a terminal, a test or LaunchServices.
+bool isLaunchdJob() {
+    const char* name = getenv("XPC_SERVICE_NAME");
+    return name && std::strcmp(name, kLabel) == 0;
 }
 
-bool canPostEvents() {
-    return IOHIDCheckAccess(kIOHIDRequestTypePostEvent) == kIOHIDAccessTypeGranted || AXIsProcessTrusted();
+// Seconds since the file was last written; very large if it does not exist.
+double fileAge(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) return 1e12;
+    return std::difftime(std::time(nullptr), st.st_mtime);
 }
 
-bool canListen() { return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted; }
+bool usesDock(const Config& c) {
+    auto dock = [](Act a) { return a == Act::MissionControl || a == Act::AppExpose || a == Act::ShowDesktop; };
+    for (const auto& b : c.buttons)
+        if (dock(b.act)) return true;
+    if (c.button(Control::Thumb).act == Act::Gestures)
+        for (Act a : c.gestures)
+            if (dock(a)) return true;
+    return false;
+}
 
 std::string displayName(const std::string& raw) {
     std::string n = raw.empty() ? "MX Master 3S" : raw;
@@ -104,13 +107,14 @@ std::string selfPath() {
     return proc_pidpath(getpid(), buf, sizeof buf) > 0 ? buf : "";
 }
 
+
 // ---------------------------------------------------------------- the agent
 
 class Agent {
 public:
     int run();
-    void quit(int code);
-    void startUpdate();
+    void quit(int code, bool restarting = false);
+    void startUpdate(bool force = false);
 
 private:
     struct Session {
@@ -127,11 +131,16 @@ private:
     void applyAll(bool force = false);
     void reloadConfig();
     void refreshPermissions();
+    void refreshScrolling();
+    void restartIfInputMissing(double minUptime);
+    void restart(const char* why);
     void publish();
     void watchSystem();
     void askPermissions();
     bool missingPermission() const { return !canPost_ || !canListen_ || openDenied_; }
     void updateFinished(int status);
+    void trimSoon();
+    void trimWhenIdle();
 
     Config cfg_;
     State last_;
@@ -145,10 +154,12 @@ private:
     io_connect_t power_ = 0;
     IONotificationPortRef powerPort_ = nullptr;
     io_object_t powerNotifier_ = 0;
-    int notifyToken_ = 0, askToken_ = 0, reapplyToken_ = 0;
+    int notifyToken_ = 0, askToken_ = 0, reapplyToken_ = 0, recheckToken_ = 0;
     CFRunLoopTimerRef permissionTimer_ = nullptr;
     std::vector<dispatch_source_t> signals_;
-    bool quitting_ = false;
+    std::atomic<bool> asking_{false};  // system prompts on screen
+    double started_ = 0, lastActivity_ = 0;
+    bool trimPending_ = false, restartAfterUpdate_ = false, quitting_ = false;
 };
 
 Agent* gAgent = nullptr;
@@ -213,6 +224,7 @@ void Agent::reports() {
         }
         if (s->device->started()) settle(*s->device, cfg_, canPost_, natural_);
     }
+    trimSoon();
 }
 
 void Agent::applyAll(bool force) {
@@ -229,17 +241,20 @@ void Agent::reloadConfig() {
     Config c = loadConfig();
     bool updatesTurnedOn = c.autoUpdate && !cfg_.autoUpdate;
     cfg_ = c;
+    if (usesDock(cfg_)) hiServices("CoreDockSendNotification");  // load it now, not on the first press
     applyAll();
-    if (updatesTurnedOn) after(30, [this] { startUpdate(); });
+    if (updatesTurnedOn) after(30, [this] { startUpdate(true); });
 }
 
 void Agent::refreshPermissions() {
-    bool post = canPostEvents(), listen = canListen(), natural = systemNaturalScrolling();
-    bool changed = post != canPost_ || natural != natural_;
+    bool post = canPostEvents(), listen = canListen();
+    // A new process sees a new permission everywhere (opening the mouse, posting events), so the
+    // launchd job simply restarts; launchd starts it again right away.
+    if (((post && !canPost_) || (listen && !canListen_)) && isLaunchdJob()) return restart("permission granted");
+    bool changed = post != canPost_;
     bool listenGranted = listen && !canListen_;
     canPost_ = post;
     canListen_ = listen;
-    natural_ = natural;
     if (changed) applyAll();
     if (listenGranted && openDenied_) {
         openDenied_ = false;  // Input Monitoring was just granted: open the mouse again
@@ -250,6 +265,32 @@ void Agent::refreshPermissions() {
     if (missingPermission() && permissionTimer_)
         CFRunLoopTimerSetNextFireDate(permissionTimer_, CFAbsoluteTimeGetCurrent() + 3);
     publish();
+}
+
+void Agent::refreshScrolling() {
+    bool natural = systemNaturalScrolling();
+    if (natural == natural_) return;
+    natural_ = natural;
+    applyAll();
+}
+
+// macOS keeps answering a running process's Input Monitoring check with what was true when the
+// process started: access granted later in System Settings only reaches a new process. So while
+// access is missing, the launchd job restarts itself now and then (see watchSystem), never while
+// the system prompts are on screen.
+void Agent::restartIfInputMissing(double minUptime) {
+    if (!isLaunchdJob() || (canListen_ && !openDenied_) || asking_) return;
+    if (CFAbsoluteTimeGetCurrent() - started_ < minUptime) return;
+    restart("looking for Input Monitoring access");
+}
+
+void Agent::restart(const char* why) {
+    if (updater_) {  // an update may be replacing the app right now: restart after it
+        restartAfterUpdate_ = true;
+        return;
+    }
+    os_log(gLog, "restarting: %{public}s", why);
+    quit(0, true);
 }
 
 void Agent::publish() {
@@ -275,9 +316,29 @@ void Agent::publish() {
     if (s == last_) return;
     last_ = s;
     saveState(s);
+    trimSoon();
 }
 
-void Agent::startUpdate() {
+// The allocator keeps memory that was freed (after startup, a reconnect or a burst of events)
+// for later; once things are quiet it goes back to the system.
+void Agent::trimSoon() {
+    lastActivity_ = CFAbsoluteTimeGetCurrent();
+    if (trimPending_) return;
+    trimPending_ = true;
+    after(5, [this] { trimWhenIdle(); });
+}
+
+void Agent::trimWhenIdle() {
+    double idle = CFAbsoluteTimeGetCurrent() - lastActivity_;
+    if (idle < 4) {
+        after(5 - idle, [this] { trimWhenIdle(); });
+        return;
+    }
+    trimPending_ = false;
+    malloc_zone_pressure_relief(nullptr, 0);
+}
+
+void Agent::startUpdate(bool force) {
     int status = 0;
     if (updater_ && waitpid(updater_, &status, WNOHANG) == updater_) {
         // The child finished before its exit could be observed: handle it now.
@@ -290,6 +351,10 @@ void Agent::startUpdate() {
         updateFinished(WIFEXITED(status) ? WEXITSTATUS(status) : -1);
     }
     if (updater_ || quitting_ || !cfg_.autoUpdate || !installedForUpdates()) return;
+    // At most one check every six hours, also across restarts.
+    std::string checked = dataDir() + "/update-checked";
+    if (!force && fileAge(checked) < 6 * 3600 - 120) return;
+    writeFileAtomic(checked, "");
     std::string exe = selfPath();
     if (exe.empty()) return;
     char* argv[] = {const_cast<char*>(exe.c_str()), const_cast<char*>("--update"), nullptr};
@@ -319,23 +384,29 @@ void Agent::startUpdate() {
 }
 
 void Agent::updateFinished(int status) {
-    if (status != kUpdateInstalled) return;
+    if (status != kUpdateInstalled) {
+        if (restartAfterUpdate_) restart("permission granted");
+        trimSoon();
+        return;
+    }
     std::string text;
     if (readFile(dataDir() + "/update-note", text)) updateNote_ = text;
     os_log(gLog, "updated, restarting: %{public}s", updateNote_.c_str());
     publish();
-    quit(0);  // launchd starts the new version right away
+    quit(0, true);  // launchd starts the new version right away
 }
 
-void Agent::quit(int code) {
+void Agent::quit(int code, bool restarting) {
     if (quitting_) return;
     // Give every control back to the mouse so it keeps working while we are not running.
     for (auto& s : sessions_)
         if (s->device->started()) s->device->restore();
-    State s = last_;
-    s.running = false;
-    s.connected = false;
-    saveState(s);
+    if (!restarting) {
+        State s = last_;
+        s.running = false;
+        s.connected = false;
+        saveState(s);
+    }
     quitting_ = true;
     hid_.stop();
     std::exit(code);
@@ -344,18 +415,13 @@ void Agent::quit(int code) {
 void Agent::askPermissions() {
     bool post = canPostEvents(), listen = canListen();
     if (post && listen) return;
+    writeFileAtomic(dataDir() + "/prompted", "");  // look for the grant often for a while
+    if (asking_.exchange(true)) return;            // the prompts are on screen already
     // The prompts can block until answered, so never ask on the main thread.
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        if (!post) {
-            const void* keys[] = {kAXTrustedCheckOptionPrompt};
-            const void* vals[] = {kCFBooleanTrue};
-            CFDictionaryRef opts = CFDictionaryCreate(kCFAllocatorDefault, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks,
-                                                      &kCFTypeDictionaryValueCallBacks);
-            AXIsProcessTrustedWithOptions(opts);
-            CFRelease(opts);
-            IOHIDRequestAccess(kIOHIDRequestTypePostEvent);
-        }
-        if (!listen) IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+        if (!post) askForAccessibility();
+        if (!listen) askForInputMonitoring();
+        asking_ = false;
     });
 }
 
@@ -372,6 +438,12 @@ void Agent::watchSystem() {
     notify_register_dispatch(kAskPermission, &askToken_, dispatch_get_main_queue(), ^(int) {
         askPermissions();
     });
+    // The window became active while it shows a missing permission (perhaps back from System
+    // Settings): look again, in a new process if Input Monitoring is the one missing.
+    notify_register_dispatch(kRecheck, &recheckToken_, dispatch_get_main_queue(), ^(int) {
+        refreshPermissions();
+        restartIfInputMissing(3);
+    });
     // Natural scrolling and Accessibility changes.
     CFNotificationCenterRef dist = CFNotificationCenterGetDistributedCenter();
     // TCC can take a moment to reflect a new grant: look shortly after, and again a bit later.
@@ -387,18 +459,21 @@ void Agent::watchSystem() {
         dist, this,
         [](CFNotificationCenterRef, void* self, CFNotificationName, const void*, CFDictionaryRef) {
             auto* a = static_cast<Agent*>(self);
-            after(0.2, [a] { a->refreshPermissions(); });
+            after(0.2, [a] { a->refreshScrolling(); });
         },
         CFSTR("SwipeScrollDirectionDidChangeNotification"), nullptr, CFNotificationSuspensionBehaviorDeliverImmediately);
 
     // Permissions are re-checked every few seconds while something is missing, hourly otherwise
-    // (a change also arrives as a notification, see above).
+    // (a change also arrives as a notification, see above). While Input Monitoring is missing the
+    // agent restarts to see a grant: every 10 seconds during the ten minutes after the system
+    // prompt or "Allow…", every 15 minutes otherwise.
     CFRunLoopTimerContext ctx = {0, this, nullptr, nullptr, nullptr};
     permissionTimer_ = CFRunLoopTimerCreate(
         kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 3, 3, 0, 0,
         [](CFRunLoopTimerRef t, void* self) {
             auto* a = static_cast<Agent*>(self);
             if (a->missingPermission()) a->refreshPermissions();
+            if (a->missingPermission()) a->restartIfInputMissing(fileAge(dataDir() + "/prompted") < 600 ? 10 : 900);
             if (!a->missingPermission()) CFRunLoopTimerSetNextFireDate(t, CFAbsoluteTimeGetCurrent() + 3600);
         },
         &ctx);
@@ -413,7 +488,10 @@ void Agent::watchSystem() {
             if (type == kIOMessageCanSystemSleep || type == kIOMessageSystemWillSleep)
                 IOAllowPowerChange(a->power_, reinterpret_cast<intptr_t>(arg));
             else if (type == kIOMessageSystemHasPoweredOn)
-                after(3, [a] { a->applyAll(true); });
+                after(3, [a] {
+                    a->natural_ = systemNaturalScrolling();
+                    a->applyAll(true);
+                });
         },
         &powerNotifier_);
     if (power_ && powerPort_) IONotificationPortSetDispatchQueue(powerPort_, dispatch_get_main_queue());
@@ -434,7 +512,10 @@ void Agent::watchSystem() {
 int Agent::run() {
     gAgent = this;
     gLog = os_log_create("app.mouse", "agent");
+    started_ = CFAbsoluteTimeGetCurrent();
+    last_ = loadState();  // the state file is written only when something changes
     cfg_ = loadConfig();
+    if (usesDock(cfg_)) hiServices("CoreDockSendNotification");
     canPost_ = canPostEvents();
     canListen_ = canListen();
     natural_ = systemNaturalScrolling();
@@ -458,76 +539,11 @@ int Agent::run() {
         writeFileAtomic(asked, "1");
         askPermissions();
     }
-    // First look for updates ten minutes after start, then every six hours: updates land within a day.
-    every(600, 6 * 3600, [this] { startUpdate(); });
+    // Look for updates ten minutes after start and then hourly; a check runs at most every six
+    // hours (see startUpdate), so updates land within a day.
+    every(600, 3600, [this] { startUpdate(); });
+    trimSoon();
     CFRunLoopRun();
-    return 0;
-}
-
-// ---------------------------------------------------------------- simulation
-
-// `--simulate <script>`: a simulated mouse whose events produce real macOS input. Script lines:
-//   press c3 | release c3 | move dx dy | wheel n | hires n | thumb n | battery p | sleep s | apply
-int simulate(const char* path, bool dryRun) {
-    std::ifstream in(path);
-    if (!in) {
-        std::fprintf(stderr, "cannot read %s\n", path);
-        return 2;
-    }
-    sim::MXMaster3S mouse;
-    sim::SimTransport link(mouse);
-    struct Printer : Output {
-        Output* real;
-        bool dry;
-        double now() override { return real->now(); }
-        void key(const Shortcut& s) override { std::printf("key %s\n", shortcutDisplay(s).c_str()); if (!dry) real->key(s); }
-        void button(int b, bool d, uint32_t m) override { std::printf("button %d %s %u\n", b, d ? "down" : "up", m); if (!dry) real->button(b, d, m); }
-        void dock(Dock d) override { std::printf("dock %d\n", static_cast<int>(d)); if (!dry) real->dock(d); }
-        void media(int k) override { std::printf("media %d\n", k); if (!dry) real->media(k); }
-        void dictation() override { std::printf("dictation\n"); if (!dry) real->dictation(); }
-        void navigate(bool f) override { std::printf("navigate %s\n", f ? "forward" : "back"); if (!dry) real->navigate(f); }
-        void scroll(int dy, int dx, bool c) override { std::printf("scroll %d %d %s\n", dy, dx, c ? "px" : "lines"); if (!dry) real->scroll(dy, dx, c); }
-    };
-    MacOutput real;
-    Printer out;
-    out.real = &real;
-    out.dry = dryRun;
-    Device dev(link, out);
-    if (!dev.start()) return 3;
-    Config cfg = loadConfig();
-    dev.apply(cfg, true, systemNaturalScrolling());
-    std::string line;
-    while (std::getline(in, line)) {
-        std::istringstream ss(line);
-        std::string cmd;
-        ss >> cmd;
-        if (cmd.empty() || cmd[0] == '#') continue;
-        if (cmd == "sleep") {
-            double s = 0;
-            ss >> s;
-            usleep(static_cast<useconds_t>(s * 1e6));
-            continue;
-        }
-        if (cmd == "apply") {
-            dev.apply(loadConfig(), true, systemNaturalScrolling());
-            continue;
-        }
-        long a = 0, b = 0;
-        std::string first;
-        ss >> first;
-        a = std::strtol(first.c_str(), nullptr, cmd == "press" || cmd == "release" ? 16 : 10);
-        ss >> b;
-        if (cmd == "press") mouse.press(static_cast<uint16_t>(a));
-        else if (cmd == "release") mouse.release(static_cast<uint16_t>(a));
-        else if (cmd == "move") mouse.move(static_cast<int>(a), static_cast<int>(b));
-        else if (cmd == "wheel") mouse.turnWheel(static_cast<int>(a));
-        else if (cmd == "hires") mouse.turnWheelHiRes(static_cast<int>(a));
-        else if (cmd == "thumb") mouse.turnThumbwheel(static_cast<int>(a));
-        else if (cmd == "battery") mouse.setBattery(static_cast<int>(a), b != 0);
-        link.pump(dev);
-        std::fflush(stdout);
-    }
-    dev.restore();
     return 0;
 }
 
@@ -681,17 +697,35 @@ int probe(double seconds) {
     return 0;
 }
 
+// Opened by LaunchServices (Finder, or "Quit & Reopen" in System Settings) instead of launchd:
+// restart the launchd job, which then sees any permission granted meanwhile, and leave.
+int handOverToLaunchd() {
+    std::string target = "gui/" + std::to_string(getuid()) + "/" + kLabel;
+    char* argv[] = {const_cast<char*>("/bin/launchctl"), const_cast<char*>("kickstart"), const_cast<char*>("-k"),
+                    const_cast<char*>(target.c_str()), nullptr};
+    pid_t pid = 0;
+    if (posix_spawn(&pid, argv[0], nullptr, nullptr, argv, environ) == 0) {
+        int status = 0;
+        waitpid(pid, &status, 0);
+    }
+    return 0;
+}
+
 }  // namespace
 }  // namespace mouse::mac
 
-int runAgent(int argc, char** argv) {
-    const char* script = nullptr;
-    bool dry = false;
-    for (int i = 1; i < argc; i++) {
-        if (!std::strcmp(argv[i], "--simulate") && i + 1 < argc) script = argv[++i];
-        if (!std::strcmp(argv[i], "--dry")) dry = true;
+int runAgent(int, char** argv) {
+    if (const char* n = getenv("XPC_SERVICE_NAME"); n && std::strncmp(n, "application.app.mouse.agent.", 28) == 0)
+        return mouse::mac::handOverToLaunchd();
+    // The agent's heap is tiny (about 150 KB), but by default macOS spreads a process's heap over
+    // pages per CPU, which here costs half a megabyte. Malloc reads its settings when a process
+    // starts, so the agent asks for its space-efficient mode with a single magazine and starts
+    // itself once more (execv keeps the process: launchd sees nothing).
+    if (!getenv("MallocMaxMagazines") && setenv("MallocSpaceEfficient", "1", 1) == 0 &&
+        setenv("MallocMaxMagazines", "1", 1) == 0) {
+        std::string exe = mouse::mac::selfPath();
+        if (!exe.empty()) execv(exe.c_str(), argv);  // returns only on failure: carry on as we are
     }
-    if (script) return mouse::mac::simulate(script, dry);
     static mouse::mac::Agent agent;
     return agent.run();
 }

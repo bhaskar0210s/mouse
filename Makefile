@@ -1,5 +1,5 @@
 APP       := Mouse
-VERSION   := 1.0.2
+VERSION   := 1.0.3
 BUILD     := build
 BUNDLE    := $(BUILD)/$(APP).app
 BINARY    := $(BUNDLE)/Contents/MacOS/$(APP)
@@ -8,8 +8,9 @@ AGENT     := $(HELPER)/Contents/MacOS/MouseAgent
 PREFIX    ?= /Applications
 
 CXX       := clang++
-ARCHS     ?= $(shell uname -m)
-MIN_MACOS := 13.0
+# Apple silicon and macOS 27 or later only.
+ARCH      := arm64
+MIN_MACOS := 27.0
 # Code signing identity: "-" (ad hoc) by default. Releases are signed with the project's own
 # certificate (SHA-1 below) so every version satisfies the same designated requirement and
 # macOS keeps its Accessibility / Input Monitoring permission across updates.
@@ -17,34 +18,41 @@ RELEASE_ID := 36C5521F087DACFB0AE26D2332DC3331BADFB13A
 SIGN_ID   ?= -
 SIGN_KEYCHAIN ?=
 
-ARCHFLAGS := $(foreach a,$(ARCHS),-arch $(a)) -mmacosx-version-min=$(MIN_MACOS)
+ARCHFLAGS := -arch $(ARCH) -mmacosx-version-min=$(MIN_MACOS)
 WARN      := -Wall -Wextra -Wshadow -Wno-missing-field-initializers
-CXXFLAGS  += $(ARCHFLAGS) -std=c++20 -Os $(WARN) -fvisibility=hidden -MMD -MP -DMOUSE_VERSION=\"$(VERSION)\" -Isrc
+OPT       ?= -Oz -flto
+LTOFLAGS  ?= -flto
+CXXFLAGS  += $(ARCHFLAGS) -std=c++20 $(OPT) $(WARN) -fvisibility=hidden -MMD -MP -DMOUSE_VERSION=\"$(VERSION)\" -Isrc
 OBJCFLAGS := -fobjc-arc
-LDFLAGS   += $(ARCHFLAGS) -dead_strip
+LDFLAGS   += $(ARCHFLAGS) $(LTOFLAGS) -dead_strip
 
 CORE_SRC  := $(wildcard src/core/*.cpp)
 SIM_SRC   := $(wildcard src/sim/*.cpp)
-AGENT_SRC := $(CORE_SRC) $(SIM_SRC) $(wildcard src/mac/*.cpp)
+MAC_SRC   := src/mac/hid.cpp src/mac/output.cpp src/mac/system.cpp
+AGENT_SRC := $(CORE_SRC) $(MAC_SRC) src/mac/agent.cpp src/mac/agent_main.cpp src/mac/updater.cpp
 UI_SRC    := $(CORE_SRC)
 UI_MM     := $(wildcard src/mac/*.mm src/ui/*.mm)
 AGENT_OBJ := $(AGENT_SRC:src/%.cpp=$(BUILD)/obj/%.o)
 UI_OBJ    := $(UI_SRC:src/%.cpp=$(BUILD)/obj/%.o) $(UI_MM:src/%.mm=$(BUILD)/obj/%.o)
-# The agent never loads AppKit: it stays at a couple of megabytes.
-AGENT_LIBS := -framework IOKit -framework ApplicationServices -framework Security -framework CoreFoundation
-UI_LIBS    := -framework AppKit -framework ServiceManagement -framework IOKit -framework ApplicationServices \
-              -framework CoreFoundation
+SIM_OBJ   := $(patsubst src/%.cpp,$(BUILD)/obj/%.o,$(CORE_SRC) $(SIM_SRC) $(MAC_SRC) src/mac/simulate.cpp)
+# The agent never loads AppKit (nor, unless needed, the Accessibility framework): it stays at
+# a couple of megabytes.
+AGENT_LIBS := -framework IOKit -framework CoreGraphics -framework Security -framework CoreFoundation
+UI_LIBS    := -framework AppKit -framework CoreFoundation
 
 TEST_SRC  := $(wildcard tests/*.cpp)
 TEST_OBJ  := $(TEST_SRC:tests/%.cpp=$(BUILD)/test/%.o) $(patsubst src/%.cpp,$(BUILD)/test/src/%.o,$(CORE_SRC) $(SIM_SRC))
 TEST_BIN  := $(BUILD)/mouse-tests
+SIM_BIN   := $(BUILD)/mouse-simulate
 
 ICON      := resources/$(APP).icns
+AGENT_ICON := resources/MouseAgent.icns
 RESOURCES := $(BUNDLE)/Contents/Info.plist $(HELPER)/Contents/Info.plist \
-             $(if $(wildcard $(ICON)),$(BUNDLE)/Contents/Resources/$(APP).icns $(HELPER)/Contents/Resources/$(APP).icns)
+             $(if $(wildcard $(ICON)),$(BUNDLE)/Contents/Resources/$(APP).icns) \
+             $(if $(wildcard $(AGENT_ICON)),$(HELPER)/Contents/Resources/MouseAgent.icns)
 SIGN      = codesign --force --sign "$(SIGN_ID)" $(if $(SIGN_KEYCHAIN),--keychain "$(SIGN_KEYCHAIN)") --timestamp=none
 
-.PHONY: all app run install uninstall test snapshot icon zip release clean
+.PHONY: all app run install uninstall test simulate snapshot icon zip release clean
 
 all: app
 
@@ -67,6 +75,12 @@ $(AGENT): $(AGENT_OBJ)
 	$(CXX) $(LDFLAGS) $^ -o $@ $(AGENT_LIBS)
 	@strip -x $@
 
+# Development tool (not part of the app): drives a simulated mouse from a script with real output.
+simulate: $(SIM_BIN)
+
+$(SIM_BIN): $(SIM_OBJ)
+	$(CXX) $(LDFLAGS) $^ -o $@ $(AGENT_LIBS)
+
 $(BUNDLE)/Contents/Info.plist: resources/Info.plist Makefile
 	@mkdir -p $(@D)
 	@sed 's/__VERSION__/$(VERSION)/g' $< > $@
@@ -75,7 +89,11 @@ $(HELPER)/Contents/Info.plist: resources/AgentInfo.plist Makefile
 	@mkdir -p $(@D)
 	@sed 's/__VERSION__/$(VERSION)/g' $< > $@
 
-$(BUNDLE)/Contents/Resources/$(APP).icns $(HELPER)/Contents/Resources/$(APP).icns: $(ICON)
+$(BUNDLE)/Contents/Resources/$(APP).icns: $(ICON)
+	@mkdir -p $(@D)
+	@cp $< $@
+
+$(HELPER)/Contents/Resources/MouseAgent.icns: $(AGENT_ICON)
 	@mkdir -p $(@D)
 	@cp $< $@
 
@@ -130,23 +148,29 @@ zip: app
 	@cd $(BUILD) && rm -f $(APP).zip && ditto -c -k --sequesterRsrc --keepParent $(APP).app $(APP).zip
 	@echo "Wrote $(BUILD)/$(APP).zip"
 
-# Universal, certificate-signed zip for GitHub releases (see .github/workflows/release.yml).
+# Certificate-signed zip for GitHub releases (see .github/workflows/release.yml).
 release:
 	@$(MAKE) clean
-	@$(MAKE) zip ARCHS="arm64 x86_64" SIGN_ID="$(RELEASE_ID)" SIGN_KEYCHAIN="$(SIGN_KEYCHAIN)" VERSION="$(VERSION)"
+	@$(MAKE) zip SIGN_ID="$(RELEASE_ID)" SIGN_KEYCHAIN="$(SIGN_KEYCHAIN)" VERSION="$(VERSION)"
 	@codesign --verify --strict $(BUNDLE)
 	@codesign -d -r- $(BUNDLE) 2>&1 | grep -q 'certificate leaf' || (echo "release is not certificate-signed" && false)
-	@lipo -info $(BINARY)
-	@lipo -info $(AGENT)
+	@for f in $(BINARY) $(AGENT); do test "$$(lipo -archs $$f)" = $(ARCH) || (echo "$$f is not $(ARCH) only" && false); done
+	@for f in $(BINARY) $(AGENT); do vtool -show-build $$f | grep -q "minos $(MIN_MACOS)" || (echo "$$f: wrong minimum macOS" && false); done
 
+# The agent gets a small icon: it only appears in the Privacy & Security lists and prompts.
 icon: tools/icon.cpp
-	@mkdir -p $(BUILD)/icon.iconset
-	$(CXX) -std=c++20 -O2 $< -o $(BUILD)/icon -framework CoreGraphics -framework ImageIO -framework CoreFoundation
+	@rm -rf $(BUILD)/icon.iconset $(BUILD)/agent-icon.iconset
+	@mkdir -p $(BUILD)/icon.iconset $(BUILD)/agent-icon.iconset
+	$(CXX) -std=c++20 -O2 $< -o $(BUILD)/icon -framework CoreGraphics -framework CoreFoundation -lz
 	@$(BUILD)/icon $(BUILD)/icon.iconset
+	@$(BUILD)/icon --small $(BUILD)/agent-icon.iconset
 	@iconutil -c icns $(BUILD)/icon.iconset -o $(ICON)
-	@echo "Wrote $(ICON)"
+	@iconutil -c icns $(BUILD)/agent-icon.iconset -o $(AGENT_ICON)
+	@$(BUILD)/icon --pack $(BUILD)/icon.iconset $(ICON)
+	@$(BUILD)/icon --pack $(BUILD)/agent-icon.iconset $(AGENT_ICON)
+	@echo "Wrote $(ICON) ($$(stat -f%z $(ICON)) bytes) and $(AGENT_ICON) ($$(stat -f%z $(AGENT_ICON)) bytes)"
 
 clean:
 	rm -rf $(BUILD)
 
--include $(AGENT_OBJ:.o=.d) $(UI_OBJ:.o=.d) $(TEST_OBJ:.o=.d)
+-include $(AGENT_OBJ:.o=.d) $(UI_OBJ:.o=.d) $(SIM_OBJ:.o=.d) $(TEST_OBJ:.o=.d)

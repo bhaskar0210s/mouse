@@ -7,10 +7,10 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: xcode-27  # macOS 27, Apple silicon
     steps:
       - uses: actions/checkout@v5
       - name: Tests (AddressSanitizer + UBSan)
         run: make test
-      - name: Build (universal)
-        run: make app ARCHS="arm64 x86_64"
+      - name: Build
+        run: make app

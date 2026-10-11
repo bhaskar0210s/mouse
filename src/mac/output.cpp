@@ -6,14 +6,15 @@
 // ⌘⇥, ⌃← and the Dictation key included). Mouse buttons and scrolling use Quartz events.
 #include "output.hpp"
 
-#include <ApplicationServices/ApplicationServices.h>
+#include <CoreGraphics/CoreGraphics.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hidsystem/IOHIDLib.h>
 #include <IOKit/hidsystem/IOHIDShared.h>
 #include <IOKit/hidsystem/IOLLEvent.h>
 #include <IOKit/hidsystem/ev_keymap.h>
-#include <dlfcn.h>
 #include <mach/mach_time.h>
+
+#include "mac/system.hpp"
 
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
@@ -169,7 +170,7 @@ void MacOutput::navigate(bool forward) {
 }
 
 void MacOutput::dock(Dock d) {
-    static auto send = reinterpret_cast<CoreDockSendNotificationFn>(dlsym(RTLD_DEFAULT, "CoreDockSendNotification"));
+    static auto send = reinterpret_cast<CoreDockSendNotificationFn>(hiServices("CoreDockSendNotification"));
     if (!send) return;
     CFStringRef name = d == Dock::MissionControl ? CFSTR("com.apple.expose.awake")
                        : d == Dock::AppExpose    ? CFSTR("com.apple.expose.front.awake")

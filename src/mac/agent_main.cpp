@@ -1,6 +1,5 @@
 // MouseAgent (Mouse.app/Contents/Helpers/MouseAgent.app): started by launchd at login.
 //   MouseAgent                        keep the mouse configured and perform its actions
-//   MouseAgent --simulate <file>      drive a simulated mouse from a script (real output; --dry prints only)
 //   MouseAgent --info                 read the connected mouse without changing anything
 //   MouseAgent --probe [seconds]      print what a connected MX Master 3S reports
 //   MouseAgent --update               install a newer release if there is one (spawned by the agent)

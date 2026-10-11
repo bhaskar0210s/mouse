@@ -8,7 +8,7 @@ thumb-button gestures, pointer speed and scrolling without Logi Options+.
 |                         | Mouse            | Logi Options+     |
 | ----------------------- | ---------------- | ----------------- |
 | Memory in the background | about **2 MB**   | about 180 MB      |
-| Download                | about 0.5 MB     | hundreds of MB    |
+| Download                | about 0.2 MB     | hundreds of MB    |
 | Account, telemetry, ads | none             | yes               |
 
 - **Buttons**: middle, back, forward, thumb and top buttons, plus the thumb wheel. Pick from a
@@ -44,7 +44,7 @@ If Logi Options+ is installed, quit it first so the two don't fight over the mou
 
 ### Requirements
 
-- macOS 13 Ventura or later (Apple silicon or Intel)
+- A Mac with Apple silicon and macOS 27 or later
 - MX Master 3S connected over **Bluetooth** (the Logi Bolt receiver is not supported yet)
 
 ## Build from source
@@ -53,6 +53,7 @@ If Logi Options+ is installed, quit it first so the two don't fight over the mou
 make test      # unit and simulator tests (AddressSanitizer + UBSan)
 make app       # build/Mouse.app
 make install   # copy to /Applications and open it
+make simulate  # build/mouse-simulate: a scripted, simulated mouse with real output (development)
 ```
 
 The code is C++20 with a thin AppKit layer and no third-party dependencies:
