@@ -65,6 +65,8 @@ The code is C++20 with a thin AppKit layer and no third-party dependencies:
 Useful commands:
 
 ```sh
+# Read the connected mouse (name, battery, DPI range, features) without changing anything
+/Applications/Mouse.app/Contents/Helpers/MouseAgent.app/Contents/MacOS/MouseAgent --info
 # Show what the mouse reports for 15 seconds (buttons, wheels, battery)
 /Applications/Mouse.app/Contents/Helpers/MouseAgent.app/Contents/MacOS/MouseAgent --probe
 # Render the settings window to PNG files
