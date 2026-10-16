@@ -109,14 +109,19 @@ static NSDictionary* agentPlist() {
     };
 }
 
-static int launchctl(NSArray<NSString*>* args) {
+static int launchctl(NSArray<NSString*>* args, NSString** output = nullptr) {
     NSTask* task = [NSTask new];
     task.executableURL = [NSURL fileURLWithPath:@"/bin/launchctl"];
     task.arguments = args;
-    task.standardOutput = NSFileHandle.fileHandleWithNullDevice;
+    NSPipe* pipe = output ? [NSPipe pipe] : nil;
+    task.standardOutput = pipe ?: NSFileHandle.fileHandleWithNullDevice;
     task.standardError = NSFileHandle.fileHandleWithNullDevice;
     NSError* error = nil;
     if (![task launchAndReturnError:&error]) return -1;
+    if (pipe) {
+        NSData* data = [pipe.fileHandleForReading readDataToEndOfFile];
+        *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+    }
     [task waitUntilExit];
     return task.terminationStatus;
 }
@@ -137,7 +142,11 @@ static BOOL installAgent(BOOL restart) {
                                                       error:nil];
         if (![want writeToURL:[NSURL fileURLWithPath:path] error:nil]) return NO;
     }
-    BOOL loaded = launchctl(@[ @"print", service ]) == 0;
+    NSString* info = nil;
+    BOOL loaded = launchctl(@[ @"print", service ], &info) == 0;
+    // Loaded but not running: launchd may have refused an updated agent (see reloadAgentJob in
+    // src/mac/updater.cpp). Loading the job afresh fixes that.
+    if (loaded && ![info containsString:@"\n\tstate = running\n"]) restart = YES;
     if (loaded && (changed || restart)) {
         launchctl(@[ @"bootout", service ]);
         loaded = NO;

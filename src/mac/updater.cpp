@@ -170,6 +170,23 @@ bool signedLikeUs(const std::string& app) {
 
 void note(const std::string& text) { writeFileAtomic(dataDir() + "/update-note", text); }
 
+// Since a login, macOS may hold the launchd job to the exact agent binary it started then (Mouse
+// has no Team ID to pin instead) and refuse the new one: "launch constraint violation". A job
+// loaded afresh takes the new binary, so the updater unloads the job, which stops the running
+// agent, and loads it again. (It runs in its own session: unloading the job does not stop it.)
+void reloadAgentJob() {
+    const char* home = getenv("HOME");
+    if (!home || !*home) return;
+    std::string plist = std::string(home) + "/Library/LaunchAgents/app.mouse.agent.plist";
+    if (access(plist.c_str(), R_OK) != 0) return;  // not installed as a launch agent
+    std::string domain = "gui/" + std::to_string(getuid());
+    run({"/bin/launchctl", "bootout", domain + "/app.mouse.agent"}, nullptr);
+    for (int attempt = 0; attempt < 20; attempt++) {
+        if (run({"/bin/launchctl", "bootstrap", domain, plist}, nullptr) == 0) return;
+        usleep(250000);  // launchd may still be taking the old job down
+    }
+}
+
 std::string systemVersion() {
     char buf[64] = {};
     size_t size = sizeof buf - 1;
@@ -202,6 +219,7 @@ bool installedForUpdates() {
 }
 
 int runUpdate() {
+    setsid();  // leave the agent's process group, so reloadAgentJob() can stop the agent
     std::string app = currentBundlePath();
     if (app.empty() || !installedForUpdates()) return 0;
     std::string parent = app.substr(0, app.rfind('/'));
@@ -272,6 +290,7 @@ int runUpdate() {
     run({"/bin/rm", "-rf", old}, nullptr);
     run({"/bin/rm", "-rf", stage}, nullptr);
     note("Updated to " + rel.version);
+    reloadAgentJob();
     return kUpdateInstalled;
 }
 
