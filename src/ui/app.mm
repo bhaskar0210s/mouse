@@ -9,6 +9,8 @@
 #import "ui/settings.hpp"
 #import "ui/ui.hpp"
 
+#include "core/update.hpp"
+
 int runSettingsWindow(int argc, char** argv);
 
 // Asks the background agent to show the system permission prompts for itself (window -> agent).
@@ -23,6 +25,8 @@ int runSettingsWindow(int argc, char** argv);
     int _stateToken;
     BOOL _registeredToken;
     BOOL _agentRefused;
+    BOOL _relaunching;
+    NSString* _launchVersion;
     id _activeObserver;
 }
 
@@ -31,6 +35,7 @@ int runSettingsWindow(int argc, char** argv);
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification*)note {
+    _launchVersion = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @MOUSE_VERSION;
     _settings = [[MSettings alloc] initWithConfig:mouse::loadConfig() state:mouse::loadState() snapshot:NO];
     __weak MAppDelegate* weakSelf = self;
     _settings.onAllow = ^{
@@ -47,6 +52,7 @@ int runSettingsWindow(int argc, char** argv);
     __weak MSettings* weakSettings = _settings;
     if (notify_register_dispatch(mouse::kStateChanged, &_stateToken, dispatch_get_main_queue(), ^(int) {
             [weakSettings setState:mouse::loadState()];
+            [weakSelf reopenIfUpdated];  // the agent just restarted, perhaps as a new version
         }) == NOTIFY_STATUS_OK)
         _registeredToken = YES;
     [_settings setState:mouse::loadState()];  // in case it changed before we started listening
@@ -57,6 +63,7 @@ int runSettingsWindow(int argc, char** argv);
                                                                        queue:nil
                                                                   usingBlock:^(NSNotification*) {
                                                                       [weakSelf updateLoginNote];
+                                                                      [weakSelf reopenIfUpdated];
                                                                   }];
 
     [_settings.window makeKeyAndOrderFront:nil];
@@ -64,6 +71,29 @@ int runSettingsWindow(int argc, char** argv);
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)app { return YES; }
+
+// An update replaced the app while this window was open: open the new version in its place, so the
+// window never shows old menus. Only while the window is in use, so it never appears over another
+// app; otherwise the next time it becomes active.
+- (void)reopenIfUpdated {
+    if (_relaunching || !NSApp.isActive) return;
+    NSURL* app = NSBundle.mainBundle.bundleURL;
+    NSDictionary* info = [NSDictionary dictionaryWithContentsOfURL:[app URLByAppendingPathComponent:@"Contents/Info.plist"]];
+    NSString* onDisk = info[@"CFBundleShortVersionString"];
+    if (![onDisk isKindOfClass:NSString.class] || mouse::compareVersions(onDisk.UTF8String, _launchVersion.UTF8String) <= 0)
+        return;
+    _relaunching = YES;
+    NSWorkspaceOpenConfiguration* config = [NSWorkspaceOpenConfiguration configuration];
+    config.createsNewApplicationInstance = YES;
+    [NSWorkspace.sharedWorkspace openApplicationAtURL:app
+                                        configuration:config
+                                    completionHandler:^(NSRunningApplication* running, NSError* error) {
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            if (running && !error) [NSApp terminate:nil];
+                                            else self->_relaunching = NO;
+                                        });
+                                    }];
+}
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)app hasVisibleWindows:(BOOL)visible {
     [_settings.window makeKeyAndOrderFront:nil];

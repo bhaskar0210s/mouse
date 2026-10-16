@@ -329,7 +329,9 @@ static NSScrollView* makeScroll(NSView* document) {
         if (s && s->_onOpenLoginItems) s->_onOpenLoginItems();
     };
     [_root addSubview:_footer];
-    [_window center];
+    // Opens where it was last time, which also keeps it in place when it reopens after an update.
+    if (_snapshot || ![_window setFrameUsingName:@"Settings"]) [_window center];
+    if (!_snapshot) _window.frameAutosaveName = @"Settings";
 }
 
 // Vertical centre of the traffic lights: the page switcher sits on the same line.
