@@ -100,7 +100,10 @@ private:
     void onBattery(const hidpp::Report& r);
     void forgetDeviceState();
     void releaseAll();
-    bool holding(Act a) const;
+    void letGoOfKey(int control);
+    const Layout& layoutNow(double maxAge);
+    void followGestures(bool gestures);
+    void sendKeys(const Shortcut& s);
 
     Transport& t_;
     Output& out_;
@@ -127,9 +130,12 @@ private:
     bool wheelDiverted_ = false, wheelHiRes_ = false;
     bool thumbDiverted_ = false;
 
+    static constexpr uint16_t kNoKey = 0xFFFF;
     uint16_t pressed_[4] = {};
     bool held_[kControlCount] = {};
     Act heldAct_[kControlCount] = {};
+    uint16_t heldKey_[kControlCount] = {kNoKey, kNoKey, kNoKey, kNoKey, kNoKey};  // modifier held by a button
+    Act gestureActs_[kDirCount] = {};  // the gestures of the layout the thumb button was pressed in
     GestureTracker gesture_;
     ScrollEngine scroll_;
     ScrollEngine thumbScroll_{40.0};  // fed in eighths of a turn

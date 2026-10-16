@@ -543,11 +543,12 @@ TEST(device_recovers_from_a_lost_reply) {
     CHECK_EQ(int(r.mouse.wheelMode), 0);
 }
 
-TEST(device_right_command_is_held_as_long_as_the_button) {
+TEST(device_one_key_shortcut_is_held_as_long_as_the_button) {
     Rig r;
     Config c;
-    c.button(Control::Middle).act = Act::RightCommand;
-    c.button(Control::Back).act = Act::RightCommand;
+    c.button(Control::Middle) = {Act::Shortcut, parseShortcut("right-cmd")};
+    c.button(Control::Back) = {Act::Shortcut, parseShortcut("right-cmd")};
+    c.button(Control::Forward) = {Act::Shortcut, parseShortcut("left-opt")};
     r.dev.apply(c, true, true);
     r.mouse.press(0x52);
     r.pump();
@@ -557,19 +558,26 @@ TEST(device_right_command_is_held_as_long_as_the_button) {
     CHECK_EQ(r.out.last(), std::string("modifier 54 up"));
     CHECK(r.mouse.nativeLog.empty());  // diverted: the firmware did not middle-click as well
 
-    // Two buttons: the key goes down once and comes up with the last one.
+    // Two buttons on the same key: it goes down once and comes up with the last one; another key
+    // on a third button is independent.
     r.out.clear();
     r.mouse.press(0x52);
     r.pump();
     r.mouse.press(0x53);
     r.pump();
+    r.mouse.press(0x56);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("modifier 58 down"));
     r.mouse.release(0x52);
     r.pump();
-    CHECK_EQ(r.out.log.size(), size_t(1));
+    CHECK_EQ(r.out.log.size(), size_t(2));
+    r.mouse.release(0x56);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("modifier 58 up"));
     r.mouse.release(0x53);
     r.pump();
-    CHECK_EQ(r.out.log.size(), size_t(2));
     CHECK_EQ(r.out.last(), std::string("modifier 54 up"));
+    CHECK_EQ(r.out.log.size(), size_t(4));
 
     // Settings change while held: let go right away, once.
     r.out.clear();
@@ -597,11 +605,94 @@ TEST(device_right_command_is_held_as_long_as_the_button) {
         Device d{link, out};
         CHECK(d.start());
         Config k;
-        k.button(Control::Thumb).act = Act::RightCommand;
+        k.button(Control::Thumb) = {Act::Shortcut, parseShortcut("fn")};
         d.apply(k, true, true);
         m.press(0xC3);
         link.pump(d);
-        CHECK_EQ(out.last(), std::string("modifier 54 down"));
+        CHECK_EQ(out.last(), std::string("modifier 63 down"));
     }
-    CHECK_EQ(out.last(), std::string("modifier 54 up"));
+    CHECK_EQ(out.last(), std::string("modifier 63 up"));
+
+    // On the thumb wheel a single key is a tap.
+    Rig w;
+    Config t;
+    t.thumbWheel = WheelAct::Shortcuts;
+    t.thumbUp = parseShortcut("right-opt");
+    w.dev.apply(t, true, true);
+    w.mouse.turnThumbwheel(60);
+    w.pump();
+    CHECK(w.out.log.size() >= 2);
+    CHECK_EQ(w.out.log[0], std::string("modifier 61 down"));
+    CHECK_EQ(w.out.log[1], std::string("modifier 61 up"));
+}
+
+// Per-app layouts: the app in front decides what a button does.
+TEST(device_app_layouts) {
+    Rig r;
+    Config c;  // all apps: back, forward, gestures on the thumb button, horizontal scrolling
+    AppLayout editor;
+    editor.bundleId = "com.example.editor";
+    editor.button(Control::Back).act = Act::Dictation;
+    editor.button(Control::Thumb) = {Act::Shortcut, parseShortcut("cmd+tab")};
+    editor.thumbWheel = WheelAct::Tabs;
+    c.apps = {editor};
+    r.dev.apply(c, true, true);
+    // Back is diverted because one app changes it; the thumb button follows gestures for all apps.
+    CHECK(r.mouse.control(0x53)->divert);
+    CHECK(!r.mouse.control(0x56)->divert);  // no layout changes forward
+    CHECK(r.mouse.control(0xC3)->rawXY);
+    CHECK(r.mouse.thumbDivert);
+
+    // Another app in front: back does what the mouse would do itself.
+    r.out.front = "com.example.other";
+    r.mouse.press(0x53);
+    r.pump();
+    r.mouse.release(0x53);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("navigate back"));
+    CHECK(r.mouse.nativeLog.empty());
+
+    // The editor in front: its own layout.
+    r.out.front = "com.example.editor";
+    r.mouse.press(0x53);
+    r.pump();
+    r.mouse.release(0x53);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("dictation"));
+    // Its thumb button is a shortcut: raw movement is not taken away while it is held.
+    r.mouse.press(0xC3);
+    r.pump();
+    CHECK(!r.mouse.control(0xC3)->rawXY);
+    CHECK_EQ(r.out.last(), std::string("key ⌘⇥"));
+    r.mouse.release(0xC3);
+    r.pump();
+
+    // Back in another app, the thumb button makes gestures again (click = Mission Control).
+    r.out.front = "com.example.other";
+    r.out.clear();
+    r.mouse.press(0xC3);
+    r.pump();
+    CHECK(r.mouse.control(0xC3)->rawXY);
+    r.mouse.release(0xC3);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("dock mission-control"));
+
+    // Thumb wheel: horizontal scrolling elsewhere, tabs in the editor.
+    r.out.clear();
+    r.mouse.turnThumbwheel(60);
+    r.pump();
+    CHECK(r.out.scrollEvents > 0);
+    CHECK(r.out.scrolledX != 0);
+    r.out.clear();
+    r.out.clock += 1;  // a new turn: the front app is asked again
+    r.out.front = "com.example.editor";
+    r.mouse.turnThumbwheel(60);
+    r.pump();
+    CHECK_EQ(r.out.scrollEvents, 0);
+    CHECK(!r.out.log.empty() && r.out.log[0] == "key ⌃⇥");
+
+    // Without Accessibility nothing can be re-created in software: back stays the mouse's own.
+    Rig q;
+    q.dev.apply(c, false, true);
+    CHECK(!q.mouse.control(0x53)->divert);
 }

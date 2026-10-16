@@ -2,6 +2,8 @@
 #import "ui/settings.hpp"
 #import "ui/ui.hpp"
 
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -196,6 +198,8 @@ static NSString* const kLoginNote = @"Allow Mouse in System Settings → General
     mouse::State _state;
     BOOL _snapshot;
     NSInteger _page;
+    NSInteger _app;  // the app whose layout the Buttons page shows, -1 for all apps
+    NSMutableDictionary<NSString*, NSImage*>* _icons;
 
     MRootView* _root;
     MSegmented* _pages;
@@ -214,6 +218,7 @@ static NSString* const kLoginNote = @"Allow Mouse in System Settings → General
         _cfg = config;
         _state = state;
         _snapshot = snapshot;
+        _app = -1;
         _needsPermission = permissionMissing(state);
         [self buildWindow];
         [self rebuildButtons];
@@ -402,7 +407,11 @@ static NSScrollView* makeScroll(NSView* document) {
 }
 
 - (void)setConfig:(const mouse::Config&)config {
+    std::string shown = _app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size()) ? _cfg.apps[static_cast<size_t>(_app)].bundleId : "";
     _cfg = config;
+    _app = -1;
+    for (size_t i = 0; i < _cfg.apps.size(); i++)
+        if (!shown.empty() && _cfg.apps[i].bundleId == shown) _app = static_cast<NSInteger>(i);
     _footer.updates.on = _cfg.autoUpdate;
     [self rebuildButtons];
     [self rebuildScroll];
@@ -466,7 +475,7 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
     MRecorder* toRecord = nil;
     for (int i = 0; i < mouse::kControlCount; i++) {
         auto c = static_cast<mouse::Control>(i);
-        const mouse::Binding& b = _cfg.button(c);
+        const mouse::Binding& b = [self shownLayout].button(c);
         NSString* name = str(mouse::controlName(c));
         FormRow row;
         row.title = name;
@@ -483,7 +492,7 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
                                       onChange:^(mouse::Shortcut s) {
                                           MSettings* me = weakSelf;
                                           if (!me) return;
-                                          me->_cfg.button(c).keys = s;
+                                          [me shownLayout].button(c).keys = s;
                                           [me save];
                                       }];
             row.trailing.push_back(rec);
@@ -505,12 +514,12 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
                 sub.separator = false;
                 NSString* label = [NSString stringWithFormat:@"Gesture %@", sub.title];
                 MPopup* gp = [self popupWithItems:actItems(mouse::gestureMenu())
-                                         selected:static_cast<int>(_cfg.gestures[d])
+                                         selected:static_cast<int>([self shownLayout].gestures[d])
                                             label:label];
                 gp.onSelect = ^(int tag) {
                     MSettings* me = weakSelf;
                     if (!me) return;
-                    me->_cfg.gestures[d] = static_cast<mouse::Act>(tag);
+                    [me shownLayout].gestures[d] = static_cast<mouse::Act>(tag);
                     [me save];
                 };
                 sub.trailing.push_back(gp);
@@ -525,13 +534,13 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
     wheel.icon = rowIcon(@"arrow.left.and.right");
     wheel.part = 5;
     wheel.height = kRowH;
-    MPopup* wp = [self popupWithItems:wheelItems() selected:static_cast<int>(_cfg.thumbWheel) label:@"Thumb wheel"];
+    MPopup* wp = [self popupWithItems:wheelItems() selected:static_cast<int>([self shownLayout].thumbWheel) label:@"Thumb wheel"];
     wp.onSelect = ^(int tag) {
         [weakSelf setWheelAction:static_cast<mouse::WheelAct>(tag)];
     };
     wheel.trailing.push_back(wp);
     sec.rows.push_back(wheel);
-    if (_cfg.thumbWheel == mouse::WheelAct::Shortcuts) {
+    if ([self shownLayout].thumbWheel == mouse::WheelAct::Shortcuts) {
         for (int up = 1; up >= 0; up--) {
             FormRow sub;
             sub.level = 1;
@@ -540,12 +549,12 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
             sub.part = 5;
             sub.height = kSubRowH;
             sub.separator = false;
-            MRecorder* rec = [self recorderFor:up ? _cfg.thumbUp : _cfg.thumbDown
+            MRecorder* rec = [self recorderFor:up ? [self shownLayout].thumbUp : [self shownLayout].thumbDown
                                          label:[@"Thumb wheel " stringByAppendingString:sub.title]
                                       onChange:^(mouse::Shortcut s) {
                                           MSettings* me = weakSelf;
                                           if (!me) return;
-                                          (up ? me->_cfg.thumbUp : me->_cfg.thumbDown) = s;
+                                          (up ? [me shownLayout].thumbUp : [me shownLayout].thumbDown) = s;
                                           [me save];
                                       }];
             sub.trailing.push_back(rec);
@@ -554,7 +563,26 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
         }
     }
 
+    // Which app the layout is for, and a way back to the defaults.
+    FormSection apps;
+    FormRow appRow;
+    appRow.title = @"Applies to";
+    appRow.icon = rowIcon(@"macwindow");
+    appRow.height = kRowH;
+    MButton* reset = [[MButton alloc] initWithTitle:@"Restore Defaults"];
+    reset.onPress = ^{
+        [weakSelf restoreDefaults];
+    };
+    MPopup* appPopup = [self popupWithItems:[self appItems] selected:static_cast<int>(_app + 1) label:@"Applies to"];
+    appPopup.onSelect = ^(int tag) {
+        [weakSelf chooseApp:tag];
+    };
+    appRow.trailing.push_back(reset);
+    appRow.trailing.push_back(appPopup);
+    apps.rows.push_back(appRow);
+
     std::vector<FormSection> sections;
+    sections.push_back(std::move(apps));
     sections.push_back(std::move(sec));
     [_buttons setSections:std::move(sections)];
     if (_buttonsScroll) [self sizeDocument:_buttons in:_buttonsScroll];
@@ -562,7 +590,7 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
 }
 
 - (void)setAction:(mouse::Act)act forControl:(mouse::Control)c {
-    mouse::Binding& b = _cfg.button(c);
+    mouse::Binding& b = [self shownLayout].button(c);
     mouse::Act old = b.act;
     b.act = act;
     [self save];
@@ -572,11 +600,114 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
 }
 
 - (void)setWheelAction:(mouse::WheelAct)act {
-    mouse::WheelAct old = _cfg.thumbWheel;
-    _cfg.thumbWheel = act;
+    mouse::Layout& l = [self shownLayout];
+    mouse::WheelAct old = l.thumbWheel;
+    l.thumbWheel = act;
     [self save];
     if (old == mouse::WheelAct::Shortcuts || act == mouse::WheelAct::Shortcuts)
-        [self rebuildButtonsRecording:act == mouse::WheelAct::Shortcuts && !_cfg.thumbUp.valid() ? @"Thumb wheel" : nil];
+        [self rebuildButtonsRecording:act == mouse::WheelAct::Shortcuts && !l.thumbUp.valid() ? @"Thumb wheel" : nil];
+}
+
+// ---------------------------------------------------------------------------- apps
+
+// The layout the Buttons page shows and changes: the one for all apps, or an app's own.
+- (mouse::Layout&)shownLayout {
+    if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size())) return _cfg.apps[static_cast<size_t>(_app)];
+    return _cfg;
+}
+
+static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001;  // app items are 1 + their index
+
+- (NSImage*)iconForApp:(const std::string&)bundleId {
+    NSString* key = str(bundleId);
+    if (!_icons) _icons = [NSMutableDictionary dictionary];
+    NSImage* icon = _icons[key];
+    if (!icon) {
+        NSURL* url = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:key];
+        NSImage* full = url ? [NSWorkspace.sharedWorkspace iconForFile:url.path]
+                            : [NSWorkspace.sharedWorkspace iconForContentType:UTTypeApplicationBundle];
+        icon = [full copy];
+        icon.size = NSMakeSize(16, 16);
+        _icons[key] = icon;
+    }
+    return icon;
+}
+
+- (std::vector<MenuItem>)appItems {
+    std::vector<MenuItem> items;
+    items.push_back({@"All Apps", kAllApps, symbol(@"square.grid.2x2", 12, NSFontWeightRegular)});
+    for (size_t i = 0; i < _cfg.apps.size(); i++)
+        items.push_back({str(_cfg.apps[i].name), static_cast<int>(i) + 1, [self iconForApp:_cfg.apps[i].bundleId]});
+    items.push_back({nil, -1});
+    items.push_back({@"Add App…", kAddApp});
+    if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size()))
+        items.push_back({[NSString stringWithFormat:@"Remove “%@”", str(_cfg.apps[static_cast<size_t>(_app)].name)], kRemoveApp});
+    return items;
+}
+
+- (void)chooseApp:(int)tag {
+    if (tag == kAddApp) {
+        [self addApp];
+        return;
+    }
+    if (tag == kRemoveApp) {
+        if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size())) _cfg.apps.erase(_cfg.apps.begin() + _app);
+        _app = -1;
+        [self save];
+    } else {
+        _app = tag - 1;
+    }
+    [self rebuildButtons];
+}
+
+- (void)addApp {
+    NSOpenPanel* panel = [NSOpenPanel openPanel];
+    panel.allowedContentTypes = @[ UTTypeApplicationBundle ];
+    panel.directoryURL = [NSURL fileURLWithPath:@"/Applications" isDirectory:YES];
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = NO;
+    panel.prompt = @"Add";
+    panel.message = @"Choose an app to give its own buttons.";
+    __weak MSettings* weakSelf = self;
+    [panel beginSheetModalForWindow:_window
+                  completionHandler:^(NSModalResponse response) {
+                      MSettings* me = weakSelf;
+                      if (!me) return;
+                      if (response == NSModalResponseOK && panel.URL) [me addAppAtURL:panel.URL];
+                      else [me rebuildButtons];  // the popup shows the current choice again
+                  }];
+}
+
+- (void)addAppAtURL:(NSURL*)url {
+    NSString* bundleId = [NSBundle bundleWithURL:url].bundleIdentifier;
+    if (bundleId.length) {
+        std::string id = bundleId.UTF8String;
+        _app = -1;
+        for (size_t i = 0; i < _cfg.apps.size(); i++)
+            if (_cfg.apps[i].bundleId == id) _app = static_cast<NSInteger>(i);
+        if (_app < 0) {
+            NSString* name = [NSFileManager.defaultManager displayNameAtPath:url.path];
+            if ([name.pathExtension isEqualToString:@"app"]) name = name.stringByDeletingPathExtension;
+            mouse::AppLayout a;
+            static_cast<mouse::Layout&>(a) = static_cast<const mouse::Layout&>(_cfg);  // starts like all apps
+            a.bundleId = id;
+            a.name = name.UTF8String ?: id;
+            _cfg.apps.push_back(a);
+            _app = static_cast<NSInteger>(_cfg.apps.size()) - 1;
+            [self save];
+        }
+    }
+    [self rebuildButtons];
+}
+
+// All apps: Mouse's own defaults. An app: the same as all apps.
+- (void)restoreDefaults {
+    if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size()))
+        static_cast<mouse::Layout&>(_cfg.apps[static_cast<size_t>(_app)]) = static_cast<const mouse::Layout&>(_cfg);
+    else
+        static_cast<mouse::Layout&>(_cfg) = mouse::Layout{};
+    [self save];
+    [self rebuildButtons];
 }
 
 // ---------------------------------------------------------------------------- point & scroll page

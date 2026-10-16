@@ -19,7 +19,13 @@ constexpr uint8_t kNeverDisengage = 0xFF;
 
 // Virtual key codes used by built-in actions.
 constexpr uint16_t kKeyTab = 0x30, kKeyLeft = 0x7B, kKeyRight = 0x7C, kKeyEqual = 0x18, kKeyMinus = 0x1B;
-constexpr uint16_t kKeyRightCommand = 0x36;
+
+// Calls fn for the layout for all apps and for each app's own.
+template <typename Fn>
+void forEachLayout(const Config& cfg, Fn fn) {
+    fn(static_cast<const Layout&>(cfg));
+    for (const auto& a : cfg.apps) fn(static_cast<const Layout&>(a));
+}
 
 }  // namespace
 
@@ -226,6 +232,8 @@ void Device::apply(const Config& cfg, bool canPost, bool systemNatural) {
     systemNatural_ = systemNatural;
     reapply_ = false;
     Report r;
+    // The first question about the app in front connects to the system; do it now, not on a press.
+    if (!cfg_.apps.empty()) out_.frontApp(0);
 
     if (idx_.dpi) setDpi(cfg.dpi);
     if (idx_.smartShift) setWheelMode(cfg.wheelMode, cfg.sensitivity);
@@ -243,8 +251,14 @@ void Device::apply(const Config& cfg, bool canPost, bool systemNatural) {
     }
 
     if (idx_.thumb) {
-        bool native = cfg.thumbWheel == WheelAct::HorizontalScroll && cfg.thumbSpeed == 50;
-        bool divert = !native && (canPost || cfg.thumbWheel == WheelAct::None);
+        // Diverted as soon as any layout wants more than the firmware's own horizontal scrolling;
+        // layouts that keep horizontal scrolling then get it from us.
+        bool native = cfg.thumbSpeed == 50, allNone = true;
+        forEachLayout(cfg, [&](const Layout& l) {
+            native = native && l.thumbWheel == WheelAct::HorizontalScroll;
+            allNone = allNone && l.thumbWheel == WheelAct::None;
+        });
+        bool divert = !native && (canPost || allNone);
         bool invert = !divert && cfg.thumbInverted;
         int flags = (divert ? 1 : 0) | (invert ? 2 : 0);
         if (flags != thumbFlags_ || !applied_)
@@ -257,11 +271,17 @@ void Device::apply(const Config& cfg, bool canPost, bool systemNatural) {
     if (idx_.reprog) {
         for (int i = 0; i < kControlCount; i++) {
             Control c = static_cast<Control>(i);
-            Act a = cfg.button(c).act;
-            // Actions that only talk to the mouse (or do nothing) work without Accessibility.
-            bool needsPost = a != Act::None && a != Act::WheelMode;
-            bool divert = !isNative(c, a) && (divertable_ & (1u << i)) && (canPost || !needsPost);
-            bool rawXY = divert && c == Control::Thumb && a == Act::Gestures;
+            // Diverted when any layout changes what the button does; layouts that keep the
+            // button's own action get it from us then. Actions that only talk to the mouse (or
+            // do nothing) work without Accessibility.
+            bool custom = false, quiet = true;
+            forEachLayout(cfg, [&](const Layout& l) {
+                Act a = l.button(c).act;
+                custom = custom || !isNative(c, a);
+                quiet = quiet && (a == Act::None || a == Act::WheelMode);
+            });
+            bool divert = custom && (divertable_ & (1u << i)) && (canPost || quiet);
+            bool rawXY = divert && c == Control::Thumb && cfg.button(c).act == Act::Gestures;
             setReporting(kCids[i], divert, rawXY);
         }
     }
@@ -372,16 +392,44 @@ void Device::releaseAll() {
         held_[i] = false;
         if (heldAct_[i] == Act::MiddleClick) out_.button(kButtonMiddle, false, 0);
         else if (heldAct_[i] == Act::CmdClick) out_.button(kButtonLeft, false, kCmd);
-        else if (heldAct_[i] == Act::RightCommand && !holding(Act::RightCommand)) out_.modifier(kKeyRightCommand, false);
+        letGoOfKey(i);
     }
     gesture_.end();  // a gesture in progress is dropped, never turned into a click
 }
 
-// True while another held button still holds the same action down.
-bool Device::holding(Act a) const {
-    for (int i = 0; i < kControlCount; i++)
-        if (held_[i] && heldAct_[i] == a) return true;
-    return false;
+// The modifier key that button i holds (a one-key shortcut) comes up, unless another held button
+// still holds the same key.
+void Device::letGoOfKey(int i) {
+    uint16_t key = heldKey_[i];
+    heldKey_[i] = kNoKey;
+    if (key == kNoKey) return;
+    for (uint16_t k : heldKey_)
+        if (k == key) return;
+    out_.modifier(key, false);
+}
+
+const Layout& Device::layoutNow(double maxAge) {
+    if (cfg_.apps.empty()) return cfg_;
+    return layoutFor(cfg_, out_.frontApp(maxAge));
+}
+
+// Raw movement is diverted only while the thumb button makes gestures in the app in front, so the
+// pointer moves normally for any other thumb-button action.
+void Device::followGestures(bool gestures) {
+    int i = static_cast<int>(Control::Thumb);
+    if (cfg_.apps.empty() || reporting_[i] == 0xFF || !(reporting_[i] & kDivert)) return;
+    if (((reporting_[i] & kRawXY) != 0) != gestures) setReporting(kCids[i], true, gestures);
+}
+
+// A shortcut pressed once; a modifier key alone goes down and up.
+void Device::sendKeys(const Shortcut& s) {
+    if (!s.valid()) return;
+    if (isModifierKey(s.key)) {
+        out_.modifier(s.key, true);
+        out_.modifier(s.key, false);
+    } else {
+        out_.key(s);
+    }
 }
 
 Device::~Device() { releaseAll(); }
@@ -424,19 +472,29 @@ void Device::onButtons(const Report& r) {
 
 void Device::onPress(Control c) {
     int i = static_cast<int>(c);
-    const Binding& b = cfg_.button(c);
-    // Two buttons holding the right Command key press it once and let it go with the last one.
-    bool alreadyDown = b.act == Act::RightCommand && holding(Act::RightCommand);
+    const Layout& l = layoutNow(0);  // the app in front right now decides
+    const Binding& b = l.button(c);
+    if (c == Control::Thumb) followGestures(b.act == Act::Gestures);
     held_[i] = true;
     heldAct_[i] = b.act;
     switch (b.act) {
         case Act::Gestures:
+            std::copy(std::begin(l.gestures), std::end(l.gestures), gestureActs_);
             gesture_.begin(std::max(40, static_cast<int>((info_.dpi > 0 ? info_.dpi : 1000) * 0.08)));
             break;
         case Act::MiddleClick: out_.button(kButtonMiddle, true, 0); break;
         case Act::CmdClick: out_.button(kButtonLeft, true, kCmd); break;
-        case Act::RightCommand:
-            if (!alreadyDown) out_.modifier(kKeyRightCommand, true);
+        case Act::Shortcut:
+            if (b.keys.valid() && isModifierKey(b.keys.key)) {
+                // A modifier key alone is held as long as the button; two buttons holding the same
+                // key press it once and let it go with the last one.
+                bool down = false;
+                for (uint16_t k : heldKey_) down = down || k == b.keys.key;
+                heldKey_[i] = b.keys.key;
+                if (!down) out_.modifier(b.keys.key, true);
+            } else {
+                sendKeys(b.keys);
+            }
             break;
         default: perform(b.act, b.keys); break;
     }
@@ -448,15 +506,13 @@ void Device::onRelease(Control c) {
     held_[i] = false;
     switch (heldAct_[i]) {
         case Act::Gestures:
-            if (gesture_.end() == GestureTracker::kClick) perform(cfg_.gestures[static_cast<int>(Dir::Click)], {});
+            if (gesture_.end() == GestureTracker::kClick) perform(gestureActs_[static_cast<int>(Dir::Click)], {});
             break;
         case Act::MiddleClick: out_.button(kButtonMiddle, false, 0); break;
         case Act::CmdClick: out_.button(kButtonLeft, false, kCmd); break;
-        case Act::RightCommand:
-            if (!holding(Act::RightCommand)) out_.modifier(kKeyRightCommand, false);
-            break;
         default: break;
     }
+    letGoOfKey(i);
 }
 
 void Device::perform(Act a, const Shortcut& keys) {
@@ -483,13 +539,7 @@ void Device::perform(Act a, const Shortcut& keys) {
         case Act::SpaceLeft: out_.key({kKeyLeft, kCtrl}); break;
         case Act::SpaceRight: out_.key({kKeyRight, kCtrl}); break;
         case Act::WheelMode: toggleWheelMode(); break;
-        case Act::RightCommand:
-            out_.modifier(kKeyRightCommand, true);
-            out_.modifier(kKeyRightCommand, false);
-            break;
-        case Act::Shortcut:
-            if (keys.valid()) out_.key(keys);
-            break;
+        case Act::Shortcut: sendKeys(keys); break;
     }
 }
 
@@ -503,7 +553,7 @@ void Device::onRawXY(int dx, int dy) {
         case GestureTracker::kRight: d = Dir::Right; break;
         default: return;
     }
-    perform(cfg_.gestures[static_cast<int>(d)], {});
+    perform(gestureActs_[static_cast<int>(d)], {});
 }
 
 void Device::onWheel(const Report& r) {
@@ -524,7 +574,9 @@ void Device::onThumbwheel(const Report& r) {
     if (rot == 0) return;
     if (cfg_.thumbInverted) rot = -rot;
     double now = out_.now();
-    if (cfg_.thumbWheel == WheelAct::HorizontalScroll) {
+    // The app in front decides; a turn is a burst of reports, so a recent answer is good enough.
+    const Layout& l = layoutNow(0.3);
+    if (l.thumbWheel == WheelAct::HorizontalScroll) {
         // Same direction as the firmware's own horizontal scrolling (which macOS may flip).
         double eighths = (systemNatural_ ? rot : -rot) / (info_.thumbResolution / 8.0);
         int px = thumbScroll_.feed(eighths, now, cfg_.thumbSpeed, true);
@@ -532,19 +584,15 @@ void Device::onThumbwheel(const Report& r) {
         return;
     }
     double perStep = (info_.thumbResolution / 8.0) / speedFactor(cfg_.thumbSpeed);
-    double minInterval = cfg_.thumbWheel == WheelAct::Shortcuts ? 0.1 : 0.0;
+    double minInterval = l.thumbWheel == WheelAct::Shortcuts ? 0.1 : 0.0;
     int step = stepper_.feed(rot, perStep, now, minInterval);
     if (!step) return;
     bool up = step > 0;
-    switch (cfg_.thumbWheel) {
+    switch (l.thumbWheel) {
         case WheelAct::Volume: out_.media(up ? kVolumeUp : kVolumeDown); break;
         case WheelAct::Zoom: out_.key({up ? kKeyEqual : kKeyMinus, kCmd}); break;
         case WheelAct::Tabs: out_.key(up ? Shortcut{kKeyTab, kCtrl} : Shortcut{kKeyTab, kCtrl | kShift}); break;
-        case WheelAct::Shortcuts: {
-            const Shortcut& s = up ? cfg_.thumbUp : cfg_.thumbDown;
-            if (s.valid()) out_.key(s);
-            break;
-        }
+        case WheelAct::Shortcuts: sendKeys(up ? l.thumbUp : l.thumbDown); break;
         default: break;
     }
 }

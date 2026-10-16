@@ -82,12 +82,12 @@ TEST(shortcut_parse_and_display) {
     CHECK(!parseShortcut("").valid());
     CHECK(!parseShortcut("cmd+notakey").valid());
     CHECK_EQ(keyName(0x30), std::string("tab"));
-    CHECK_EQ(keyName(0x3F), std::string(""));
-    // every key the table knows survives a round trip
+    CHECK_EQ(keyName(0x39), std::string(""));  // Caps Lock
+    // every key the table knows survives a round trip (modifier keys stand alone)
     for (int code = 0; code < 0x80; code++) {
         std::string n = keyName(static_cast<uint16_t>(code));
         if (n.empty()) continue;
-        Shortcut k{static_cast<uint16_t>(code), kCmd | kOpt};
+        Shortcut k{static_cast<uint16_t>(code), isModifierKey(static_cast<uint16_t>(code)) ? 0u : uint32_t(kCmd | kOpt)};
         CHECK(parseShortcut(shortcutSpec(k)) == k);
     }
 }
@@ -104,28 +104,110 @@ TEST(action_ids_round_trip) {
         CHECK(parseWheelAct(wheelActId(w), back));
         CHECK(back == w);
     }
-    // Gestures only appear in the thumb button's menu; the right Command key in every button's.
+    // Gestures only appear in the thumb button's menu.
     for (int c = 0; c < kControlCount; c++) {
         auto m = buttonMenu(static_cast<Control>(c));
-        bool has = false, rightCommand = false;
-        for (Act a : m) {
-            has = has || a == Act::Gestures;
-            rightCommand = rightCommand || a == Act::RightCommand;
-        }
+        bool has = false;
+        for (Act a : m) has = has || a == Act::Gestures;
         CHECK(has == (static_cast<Control>(c) == Control::Thumb));
-        CHECK(rightCommand);
     }
-    for (Act a : gestureMenu()) CHECK(a != Act::RightCommand);  // nothing to hold in a gesture
 }
 
-TEST(config_right_command) {
-    Config c = parseConfig("middle = right-command\nthumb = right-command\ngesture.up = right-command\n");
-    CHECK(c.button(Control::Middle).act == Act::RightCommand);
-    CHECK(c.button(Control::Thumb).act == Act::RightCommand);
+TEST(shortcut_single_modifier_keys) {
+    const char* names[] = {"left-cmd", "right-cmd", "left-opt", "right-opt", "left-ctrl",
+                           "right-ctrl", "left-shift", "right-shift", "fn"};
+    for (const char* n : names) {
+        Shortcut s = parseShortcut(n);
+        CHECK(s.valid());
+        CHECK(isModifierKey(s.key));
+        CHECK_EQ(s.mods, 0u);
+        CHECK_EQ(shortcutSpec(s), std::string(n));
+        CHECK(parseShortcut(shortcutSpec(s)) == s);
+    }
+    CHECK_EQ(shortcutDisplay(parseShortcut("right-cmd")), std::string("Right ⌘"));
+    CHECK_EQ(shortcutDisplay(parseShortcut("left-opt")), std::string("Left ⌥"));
+    CHECK_EQ(parseShortcut("right-cmd").key, 0x36);
+    CHECK(!parseShortcut("cmd+right-opt").valid());  // a modifier key stands alone
+    CHECK(!isModifierKey(parseShortcut("a").key));
+}
+
+TEST(modifier_tap_records_a_lone_modifier) {
+    ModifierTap t;
+    // Right Command pressed and let go.
+    CHECK_EQ(t.changed(0x36, 0x100010), ModifierTap::kNone);
+    CHECK_EQ(t.changed(0x36, 0x0), 0x36);
+    // Left Option alone, with Caps Lock on all the while.
+    CHECK_EQ(t.changed(0x3A, 0x10000 | 0x80020), ModifierTap::kNone);
+    CHECK_EQ(t.changed(0x3A, 0x10000), 0x3A);
+    // A combination of modifiers records nothing.
+    CHECK_EQ(t.changed(0x36, 0x100010), ModifierTap::kNone);
+    CHECK_EQ(t.changed(0x3A, 0x100010 | 0x80020), ModifierTap::kNone);
+    CHECK_EQ(t.changed(0x3A, 0x100010), ModifierTap::kNone);
+    CHECK_EQ(t.changed(0x36, 0x0), ModifierTap::kNone);
+    // A key pressed in between (a shortcut like ⌘W) records nothing.
+    CHECK_EQ(t.changed(0x37, 0x100008), ModifierTap::kNone);
+    t.otherKey();
+    CHECK_EQ(t.changed(0x37, 0x0), ModifierTap::kNone);
+    // fn, and Caps Lock (not a key to hold).
+    CHECK_EQ(t.changed(0x3F, 0x800000), ModifierTap::kNone);
+    CHECK_EQ(t.changed(0x3F, 0x0), 0x3F);
+    CHECK_EQ(t.changed(0x39, 0x10000), ModifierTap::kNone);
+    CHECK_EQ(t.changed(0x39, 0x0), ModifierTap::kNone);
+    // What the recorder shows while keys are held.
+    CHECK_EQ(ModifierTap::single(0x100010), 0x36);
+    CHECK_EQ(ModifierTap::single(0x100018), ModifierTap::kNone);  // both Command keys
+    CHECK_EQ(ModifierTap::single(0x10000), ModifierTap::kNone);   // only Caps Lock
+}
+
+TEST(config_migrates_right_command) {
+    // 1.0.4's "right-command" action is now a one-key shortcut; its stale recorded keys lose.
+    Config c = parseConfig("middle = right-command\nmiddle.keys = a\nthumb = right-command\ngesture.up = right-command\n");
+    CHECK(c.button(Control::Middle).act == Act::Shortcut);
+    CHECK(c.button(Control::Middle).keys == parseShortcut("right-cmd"));
+    CHECK(c.button(Control::Thumb).keys == parseShortcut("right-cmd"));
     CHECK(c.gestures[static_cast<int>(Dir::Up)] == Config{}.gestures[static_cast<int>(Dir::Up)]);  // ignored
-    CHECK(parseConfig(serializeConfig(c)) == c);
-    CHECK(serializeConfig(c).find("middle = right-command") != std::string::npos);
-    CHECK_EQ(std::string(actName(Act::RightCommand)), std::string("Right Command key"));
+    std::string text = serializeConfig(c);
+    CHECK(text.find("middle = shortcut") != std::string::npos);
+    CHECK(text.find("middle.keys = right-cmd") != std::string::npos);
+    CHECK(parseConfig(text) == c);
+}
+
+TEST(config_app_layouts) {
+    Config c;
+    c.button(Control::Middle).act = Act::Dictation;
+    AppLayout editor;
+    editor.bundleId = "com.example.editor";
+    editor.name = "Editor";
+    editor.button(Control::Back) = {Act::Shortcut, parseShortcut("cmd+z")};
+    editor.thumbWheel = WheelAct::Tabs;
+    editor.gestures[static_cast<int>(Dir::Left)] = Act::Back;
+    AppLayout browser;
+    browser.bundleId = "com.example.browser";
+    browser.name = "Web Browser";
+    browser.button(Control::Middle).act = Act::MiddleClick;
+    c.apps = {editor, browser};
+    c.dpi = 1200;
+    std::string text = serializeConfig(c);
+    CHECK(text.find("[app com.example.editor]\nname = Editor\n") != std::string::npos);
+    CHECK(text.find("[app com.example.browser]\nname = Web Browser\n") != std::string::npos);
+    CHECK(text.find("pointer.dpi = 1200") < text.find("[app "));  // settings for everything come first
+    Config back = parseConfig(text);
+    CHECK(back == c);
+    CHECK(&layoutFor(back, "com.example.editor") == &back.apps[0]);
+    CHECK(&layoutFor(back, "com.example.other") == &back);
+    CHECK(&layoutFor(back, "") == &back);
+
+    // Unknown sections and settings that belong to all apps are ignored inside a section; a second
+    // section for the same app continues it.
+    Config d = parseConfig("middle = mute\n[weird thing]\nmiddle = back\n[app]\nback = none\n[app com.x.y]\n"
+                           "pointer.dpi = 400\nforward = mute\n[app com.x.y]\ntop = none\n");
+    CHECK(d.button(Control::Middle).act == Act::Mute);
+    CHECK(d.button(Control::Back).act == Act::Back);
+    CHECK_EQ(d.dpi, 1000);
+    CHECK_EQ(d.apps.size(), size_t(1));
+    CHECK(d.apps[0].name == "com.x.y");  // no name given
+    CHECK(d.apps[0].button(Control::Forward).act == Act::Mute);
+    CHECK(d.apps[0].button(Control::Top).act == Act::None);
 }
 
 TEST(sensitivity_and_dpi_scales) {

@@ -509,7 +509,8 @@ static const CGFloat kKnob = 18;
 // ============================================================================ MRecorder
 
 @implementation MRecorder {
-    NSEventModifierFlags _live;
+    NSEventModifierFlags _live;  // modifier flags held while recording (with left/right bits)
+    mouse::ModifierTap _tap;
     id _clickMonitor;
     id _resignObserver;
 }
@@ -555,7 +556,10 @@ static NSString* modSymbols(NSEventModifierFlags f) {
     NSColor* color;
     NSFont* f = font(12);
     if (_recording) {
-        NSString* mods = modSymbols(_live);
+        // One modifier held: name it (it is what letting go records); several: their symbols.
+        uint16_t one = mouse::ModifierTap::single(_live);
+        NSString* mods = one != mouse::ModifierTap::kNone ? str(mouse::shortcutDisplay({one, 0}))
+                                                          : modSymbols(_live & NSEventModifierFlagDeviceIndependentFlagsMask);
         text = mods.length ? mods : @"Type shortcut";
         color = mods.length ? [NSColor labelColor] : [NSColor secondaryLabelColor];
         if (mods.length) f = font(13);
@@ -574,6 +578,7 @@ static NSString* modSymbols(NSEventModifierFlags f) {
     if (!self.window || _recording) return;
     _recording = YES;
     _live = 0;
+    _tap = {};
     [self.window makeFirstResponder:self];
     self.needsDisplay = YES;
     // A click anywhere else, or leaving the window, ends recording.
@@ -640,6 +645,7 @@ static bool autoFnKey(uint16_t code) {
 }
 
 - (void)record:(NSEvent*)event {
+    _tap.otherKey();
     uint16_t code = event.keyCode;
     NSEventModifierFlags f = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
     bool plain = !(f & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption |
@@ -683,9 +689,17 @@ static bool autoFnKey(uint16_t code) {
     return YES;
 }
 
+// A modifier key pressed and let go on its own records that key alone, left or right.
 - (void)flagsChanged:(NSEvent*)event {
     if (!_recording) return [super flagsChanged:event];
-    _live = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    _live = event.modifierFlags;
+    uint16_t lone = _tap.changed(event.keyCode, event.modifierFlags);
+    if (lone != mouse::ModifierTap::kNone) {
+        [self stopRecording];
+        self.shortcut = mouse::Shortcut{lone, 0};
+        if (_onChange) _onChange(_shortcut);
+        return;
+    }
     self.needsDisplay = YES;
 }
 

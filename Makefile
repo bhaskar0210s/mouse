@@ -1,5 +1,5 @@
 APP       := Mouse
-VERSION   := 1.0.6
+VERSION   := 1.0.7
 BUILD     := build
 BUNDLE    := $(BUILD)/$(APP).app
 BINARY    := $(BUNDLE)/Contents/MacOS/$(APP)
@@ -41,7 +41,7 @@ SIM_OBJ   := $(patsubst src/%.cpp,$(BUILD)/obj/%.o,$(CORE_SRC) $(SIM_SRC) $(MAC_
 # The agent never loads AppKit (nor, unless needed, the Accessibility framework): it stays at
 # a couple of megabytes.
 AGENT_LIBS := -framework IOKit -framework CoreGraphics -framework Security -framework CoreFoundation
-UI_LIBS    := -framework AppKit -framework CoreFoundation
+UI_LIBS    := -framework AppKit -framework UniformTypeIdentifiers -framework CoreFoundation
 
 TEST_SRC  := $(wildcard tests/*.cpp)
 TEST_OBJ  := $(TEST_SRC:tests/%.cpp=$(BUILD)/test/%.o) $(patsubst src/%.cpp,$(BUILD)/test/src/%.o,$(CORE_SRC) $(SIM_SRC))

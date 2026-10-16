@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "config.hpp"
 
@@ -30,6 +31,12 @@ public:
     // Positive dy scrolls up (towards the top of a page), positive dx scrolls left.
     // continuous = pixel deltas like a trackpad; otherwise whole lines like a classic wheel.
     virtual void scroll(int dy, int dx, bool continuous) = 0;
+    // Bundle id of the app in front ("" if unknown); an answer up to maxAge seconds old will do.
+    // Only asked when apps have layouts of their own.
+    virtual std::string frontApp(double maxAge) {
+        (void)maxAge;
+        return "";
+    }
 };
 
 }  // namespace mouse

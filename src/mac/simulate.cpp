@@ -52,6 +52,7 @@ int main(int argc, char** argv) {
         void modifier(uint16_t k, bool d) override { std::printf("modifier 0x%x %s\n", k, d ? "down" : "up"); if (!dry) real->modifier(k, d); }
         void navigate(bool f) override { std::printf("navigate %s\n", f ? "forward" : "back"); if (!dry) real->navigate(f); }
         void scroll(int dy, int dx, bool c) override { std::printf("scroll %d %d %s\n", dy, dx, c ? "px" : "lines"); if (!dry) real->scroll(dy, dx, c); }
+        std::string frontApp(double maxAge) override { return real->frontApp(maxAge); }  // reading it is harmless
     };
     mac::MacOutput real;
     Printer out;

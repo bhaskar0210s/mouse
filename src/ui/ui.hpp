@@ -98,6 +98,7 @@ NSString* str(const char* s);
 struct MenuItem {
     NSString* title;
     int tag;
+    NSImage* image = nil;  // shown before the title (16 pt), e.g. an app icon
 };
 
 // Borderless popup button: "Middle click ⌃⌄". Opens an instant list (see popup.mm).

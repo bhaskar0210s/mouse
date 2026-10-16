@@ -13,13 +13,17 @@ thumb-button gestures, pointer speed and scrolling without Logi Options+.
 
 Memory is the background agent's footprint (the number Activity Monitor shows), measured with
 `footprint` on macOS 27 with the mouse connected: 2.1 MB at rest, up to about 2.8 MB once it has
-been sending clicks, keys and scrolling. The settings window takes about 24 MB while it is open
-and nothing once closed.
+been sending clicks, keys and scrolling. Layouts for specific apps add about 0.5 MB, for asking
+macOS which app is in front. The settings window takes about 24 MB while it is open and nothing
+once closed.
 
 - **Buttons**: middle, back, forward, thumb and top buttons, plus the thumb wheel. Pick from a
   short list of useful actions (Mission Control, App Exposé, Dictation, ⌘-click, switch apps,
-  play/pause and more), hold the right Command key (the trigger many dictation apps use) or
-  record any keyboard shortcut.
+  play/pause and more) or record any keyboard shortcut, including a single key like right ⌘ or
+  left ⌥: the button then holds that key for as long as you hold it (the trigger many dictation
+  apps use).
+- **Per app**: give any app buttons, gestures and a thumb wheel of its own; every other app uses
+  the layout for all apps. **Restore Defaults** puts a layout back.
 - **Gestures**: hold the thumb button and move the mouse up, down, left or right.
 - **Point & Scroll**: pointer speed (200–8000 DPI), scrolling speed and direction, smooth
   scrolling, wheel mode (auto-shift, ratchet or free spin) and thumb-wheel speed and direction.
@@ -92,7 +96,8 @@ rm -rf /Applications/Mouse.app ~/Library/Application\ Support/Mouse
 
 Mouse has no account, analytics or tracking. The only network request is the update check,
 which asks GitHub for this repository's latest release. Turn off **Automatic updates** to
-stop it.
+stop it. With layouts for specific apps, MouseAgent asks macOS which app is in front when you
+press a button; it keeps no record of it.
 
 ## License
 

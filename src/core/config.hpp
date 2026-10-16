@@ -12,13 +12,33 @@ namespace mouse {
 // Modifier bits used by Shortcut::mods.
 enum : uint32_t { kCtrl = 1, kOpt = 2, kShift = 4, kCmd = 8, kFn = 16 };
 
-// A keyboard shortcut: a macOS virtual key code (US layout positions) plus modifiers.
+// A keyboard shortcut: a macOS virtual key code (US layout positions) plus modifiers. The key can
+// also be a modifier key on its own (left or right ⌘, ⌥, ⌃ or ⇧, or fn), then without modifiers.
 struct Shortcut {
     uint16_t key = 0xFFFF;  // 0xFFFF = none
     uint32_t mods = 0;
 
     bool valid() const { return key != 0xFFFF; }
     bool operator==(const Shortcut&) const = default;
+};
+
+// Key codes of the modifier keys that can be a shortcut on their own.
+bool isModifierKey(uint16_t key);
+
+// Recognises a modifier key pressed and let go on its own (nothing else pressed meanwhile), so it
+// can be recorded as a shortcut. Flags are the modifier flags after the change, as macOS reports
+// them in key events (device-dependent bits tell left from right).
+class ModifierTap {
+public:
+    static constexpr uint16_t kNone = 0xFFFF;
+    // A modifier key went down or up. Returns the key when this completes a lone press.
+    uint16_t changed(uint16_t key, uint64_t flags);
+    void otherKey() { candidate_ = kNone; }  // a regular key was pressed meanwhile
+    // The one modifier key held according to these flags, or kNone (none, or several).
+    static uint16_t single(uint64_t flags);
+
+private:
+    uint16_t candidate_ = kNone;
 };
 
 // "cmd+shift+t" <-> Shortcut. Unknown text gives an invalid shortcut.
@@ -44,10 +64,9 @@ enum class Act : uint8_t {
     Mute,
     SpaceLeft,
     SpaceRight,
-    WheelMode,     // toggle ratchet / free spin
-    Gestures,      // thumb button only: click + hold-and-move
-    RightCommand,  // the right Command key, held as long as the button (dictation apps use it)
-    Shortcut,      // the binding's keyboard shortcut
+    WheelMode,  // toggle ratchet / free spin
+    Gestures,   // thumb button only: click + hold-and-move
+    Shortcut,   // the binding's keyboard shortcut (a modifier key alone is held with the button)
 };
 
 // What the thumb wheel does.
@@ -68,7 +87,9 @@ constexpr int kControlCount = 5;
 enum class Dir : uint8_t { Click, Up, Down, Left, Right };
 constexpr int kDirCount = 5;
 
-struct Config {
+// What the buttons, the thumb-button gestures and the thumb wheel do: one layout for all apps,
+// and optionally one of its own for any app.
+struct Layout {
     Binding buttons[kControlCount] = {
         {Act::MiddleClick, {}},  // Middle (wheel click)
         {Act::Back, {}},         // Back
@@ -82,6 +103,21 @@ struct Config {
     WheelAct thumbWheel = WheelAct::HorizontalScroll;
     Shortcut thumbUp, thumbDown;  // used when thumbWheel == Shortcuts
 
+    Binding& button(Control c) { return buttons[static_cast<int>(c)]; }
+    const Binding& button(Control c) const { return buttons[static_cast<int>(c)]; }
+    bool operator==(const Layout&) const = default;
+};
+
+struct AppLayout : Layout {
+    std::string bundleId;  // e.g. "com.apple.Safari"
+    std::string name;      // shown in the window
+    bool operator==(const AppLayout&) const = default;
+};
+
+// The layout part of a Config is the one for all apps.
+struct Config : Layout {
+    std::vector<AppLayout> apps;  // apps with a layout of their own
+
     int dpi = 1000;            // pointer speed
     int scrollSpeed = 50;      // 0..100, 50 = normal
     bool naturalScroll = true; // content follows the wheel like a trackpad
@@ -93,10 +129,11 @@ struct Config {
 
     bool autoUpdate = true;
 
-    Binding& button(Control c) { return buttons[static_cast<int>(c)]; }
-    const Binding& button(Control c) const { return buttons[static_cast<int>(c)]; }
     bool operator==(const Config&) const = default;
 };
+
+// The layout for the app with this bundle id: its own if it has one, else the one for all apps.
+const Layout& layoutFor(const Config& c, const std::string& bundleId);
 
 Config parseConfig(const std::string& text);
 std::string serializeConfig(const Config& c);

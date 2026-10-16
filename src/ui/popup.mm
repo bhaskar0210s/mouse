@@ -16,9 +16,27 @@ static const CGFloat kRightPad = 20;
 static const CGFloat kRadius = 10;
 static const CGFloat kPopupPadL = 8;  // title x inside the popup button
 static const CGFloat kChevronW = 16;
+static const CGFloat kImage = 16;      // item images
+static const CGFloat kImageGap = 6;
+
+static bool hasImages(const std::vector<MenuItem>& items) {
+    for (const MenuItem& it : items)
+        if (it.image) return true;
+    return false;
+}
 
 @class MMenu;
 static MMenu* gMenu;  // the open list, if any
+
+// An item's image: app icons as they are, symbols (templates) in the text colour.
+static void drawItemImage(NSView* v, NSImage* image, NSRect r, BOOL highlighted) {
+    if (image.isTemplate) {
+        NSColor* c = highlighted ? [NSColor selectedMenuItemTextColor] : [NSColor secondaryLabelColor];
+        drawSymbol(v, image, NSMakePoint(NSMidX(r), NSMidY(r)), c);
+    } else {
+        [image drawInRect:r fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    }
+}
 
 // ============================================================================ list view
 
@@ -100,6 +118,7 @@ static MMenu* gMenu;  // the open list, if any
     NSRect b = self.bounds;
     NSFont* f = font(13);
     NSImage* check = symbol(@"checkmark", 11, NSFontWeightSemibold);
+    CGFloat textX = kTextX + (hasImages(_items) ? kImage + kImageGap : 0);
     CGFloat y = kPadV;
     for (NSInteger i = 0; i < (NSInteger)_items.size(); i++) {
         const MenuItem& it = _items[(size_t)i];
@@ -113,7 +132,8 @@ static MMenu* gMenu;  // the open list, if any
             if (hi) fillRounded(NSMakeRect(5, y, b.size.width - 10, h), 6, [NSColor controlAccentColor]);
             NSColor* c = hi ? [NSColor selectedMenuItemTextColor] : [NSColor labelColor];
             if (it.tag == _selectedTag) drawSymbol(self, check, NSMakePoint(17, y + h / 2), c);
-            drawText(self, it.title, f, c, kTextX, y + h / 2);
+            if (it.image) drawItemImage(self, it.image, NSMakeRect(kTextX, y + (h - kImage) / 2, kImage, kImage), hi);
+            drawText(self, it.title, f, c, textX, y + h / 2);
         }
         y += h;
     }
@@ -187,7 +207,8 @@ static NSImage* roundedMask(CGFloat r) {
         if (it.tag == popup.selectedTag && selIndex < 0) selIndex = (NSInteger)i;
         h += it.tag < 0 ? kSepH : kItemH;
     }
-    w = std::ceil(std::max(kTextX + w + kRightPad, popup.bounds.size.width + kTextX - [popup textInset] + 8));
+    CGFloat imageColumn = hasImages(popup.items) ? kImage + kImageGap : 0;
+    w = std::ceil(std::max(kTextX + imageColumn + w + kRightPad, popup.bounds.size.width + kTextX - [popup textInset] + 8));
 
     // Line the current item up with the button's title, like a native popup menu.
     NSRect btn = [parent convertRectToScreen:[popup convertRect:popup.bounds toView:nil]];
@@ -335,6 +356,7 @@ static NSImage* roundedMask(CGFloat r) {
 @implementation MPopup {
     std::vector<MenuItem> _items;
     NSString* _title;
+    NSImage* _image;
 }
 
 - (const std::vector<MenuItem>&)items { return _items; }
@@ -344,10 +366,15 @@ static NSImage* roundedMask(CGFloat r) {
     _items = items;
     _selectedTag = tag;
     _title = @"";
-    for (const MenuItem& it : _items)
-        if (it.tag == tag && it.tag >= 0) _title = it.title;
+    _image = nil;
+    for (const MenuItem& it : _items) {
+        if (it.tag != tag || it.tag < 0) continue;
+        _title = it.title;
+        _image = it.image;
+    }
+    CGFloat imageW = _image ? kImage + kImageGap : 0;
     NSRect f = self.frame;
-    f.size = NSMakeSize(std::ceil(kPopupPadL + textWidth(_title, font(13)) + 6 + kChevronW), 24);
+    f.size = NSMakeSize(std::ceil(kPopupPadL + imageW + textWidth(_title, font(13)) + 6 + kChevronW), 24);
     self.frame = f;
     self.needsDisplay = YES;
 }
@@ -367,7 +394,12 @@ static NSImage* roundedMask(CGFloat r) {
     NSRect b = self.bounds;
     if (self.pressed) fillRounded(b, 6, pressFill());
     else if (self.hovered) fillRounded(b, 6, hoverFill());
-    drawText(self, _title, font(13), [NSColor labelColor], kPopupPadL, NSMidY(b));
+    CGFloat x = kPopupPadL;
+    if (_image) {
+        drawItemImage(self, _image, NSMakeRect(x, std::round(NSMidY(b) - kImage / 2), kImage, kImage), NO);
+        x += kImage + kImageGap;
+    }
+    drawText(self, _title, font(13), [NSColor labelColor], x, NSMidY(b));
     static NSImage* chevron = symbol(@"chevron.up.chevron.down", 9, NSFontWeightSemibold);
     drawSymbol(self, chevron, NSMakePoint(b.size.width - kChevronW / 2 - 2, NSMidY(b)),
                [NSColor secondaryLabelColor]);

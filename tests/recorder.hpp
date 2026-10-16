@@ -9,6 +9,7 @@
 struct Recorder : mouse::Output {
     std::vector<std::string> log;
     double clock = 100.0;
+    std::string front;  // bundle id of the app in front
     int scrolledY = 0, scrolledX = 0, scrollEvents = 0;
     bool lastContinuous = false;
 
@@ -33,6 +34,7 @@ struct Recorder : mouse::Output {
         scrollEvents++;
         lastContinuous = continuous;
     }
+    std::string frontApp(double) override { return front; }
     std::string last() const { return log.empty() ? "" : log.back(); }
     void clear() {
         log.clear();

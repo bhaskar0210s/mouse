@@ -12,6 +12,7 @@
 #include <IOKit/hidsystem/IOHIDShared.h>
 #include <IOKit/hidsystem/IOLLEvent.h>
 #include <IOKit/hidsystem/ev_keymap.h>
+#include <libproc.h>
 #include <mach/mach_time.h>
 
 #include "mac/system.hpp"
@@ -54,6 +55,7 @@ constexpr ModifierKey kModifierKeys[] = {
     {0x3C, NX_SHIFTMASK, NX_DEVICERSHIFTKEYMASK, NX_DEVICELSHIFTKEYMASK},
     {0x37, NX_COMMANDMASK, NX_DEVICELCMDKEYMASK, NX_DEVICERCMDKEYMASK},
     {0x36, NX_COMMANDMASK, NX_DEVICERCMDKEYMASK, NX_DEVICELCMDKEYMASK},
+    {0x3F, NX_SECONDARYFNMASK, 0, 0},  // fn: no left or right
 };
 
 // Modifier state that belongs to the user (keys held down, Caps Lock) and is kept around ours.
@@ -80,6 +82,38 @@ uint32_t extraFlags(uint16_t key) {
 }
 
 using CoreDockSendNotificationFn = void (*)(CFStringRef, void*);
+
+// The Process Manager's front process (in HIServices, loaded only when apps have layouts). The
+// Accessibility API refuses this question to a process without windows, and the window list takes
+// milliseconds; this answer is local and instant once the first call has connected.
+struct ProcessSerial {
+    uint32_t high, low;
+};
+using GetFrontProcessFn = int32_t (*)(ProcessSerial*);
+using GetProcessPIDFn = int32_t (*)(const ProcessSerial*, pid_t*);
+
+// Bundle id of the app a process belongs to, from the path of its executable.
+std::string bundleIdOf(pid_t pid) {
+    char path[PROC_PIDPATHINFO_MAXSIZE] = {};
+    if (proc_pidpath(pid, path, sizeof path) <= 0) return "";
+    std::string p = path;
+    size_t end = p.find(".app/Contents/");
+    if (end == std::string::npos) return "";
+    p.erase(end + 4);
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, reinterpret_cast<const UInt8*>(p.c_str()),
+                                                           static_cast<CFIndex>(p.size()), true);
+    if (!url) return "";
+    std::string id;
+    if (CFBundleRef b = CFBundleCreate(kCFAllocatorDefault, url)) {
+        if (CFStringRef s = CFBundleGetIdentifier(b)) {
+            char buf[256] = {};
+            if (CFStringGetCString(s, buf, sizeof buf, kCFStringEncodingUTF8)) id = buf;
+        }
+        CFRelease(b);
+    }
+    CFRelease(url);
+    return id;
+}
 
 }  // namespace
 
@@ -210,6 +244,22 @@ void MacOutput::dock(Dock d) {
                        : d == Dock::AppExpose    ? CFSTR("com.apple.expose.front.awake")
                                                  : CFSTR("com.apple.showdesktop.awake");
     send(name, nullptr);
+}
+
+std::string MacOutput::frontApp(double maxAge) {
+    double t = now();
+    if (frontAt_ > 0 && t - frontAt_ <= maxAge) return front_;
+    static auto getFront = reinterpret_cast<GetFrontProcessFn>(hiServices("GetFrontProcess"));
+    static auto getPid = reinterpret_cast<GetProcessPIDFn>(hiServices("GetProcessPID"));
+    ProcessSerial psn{};
+    pid_t pid = 0;
+    if (!getFront || !getPid || getFront(&psn) != 0 || getPid(&psn, &pid) != 0) pid = 0;
+    if (pid != frontPid_) {
+        frontPid_ = pid;
+        front_ = pid > 0 ? bundleIdOf(pid) : "";
+    }
+    frontAt_ = t;
+    return front_;
 }
 
 void MacOutput::scroll(int dy, int dx, bool continuous) {
