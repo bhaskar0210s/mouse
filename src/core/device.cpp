@@ -19,6 +19,7 @@ constexpr uint8_t kNeverDisengage = 0xFF;
 
 // Virtual key codes used by built-in actions.
 constexpr uint16_t kKeyTab = 0x30, kKeyLeft = 0x7B, kKeyRight = 0x7C, kKeyEqual = 0x18, kKeyMinus = 0x1B;
+constexpr uint16_t kKeyRightCommand = 0x36;
 
 }  // namespace
 
@@ -371,8 +372,16 @@ void Device::releaseAll() {
         held_[i] = false;
         if (heldAct_[i] == Act::MiddleClick) out_.button(kButtonMiddle, false, 0);
         else if (heldAct_[i] == Act::CmdClick) out_.button(kButtonLeft, false, kCmd);
+        else if (heldAct_[i] == Act::RightCommand && !holding(Act::RightCommand)) out_.modifier(kKeyRightCommand, false);
     }
     gesture_.end();  // a gesture in progress is dropped, never turned into a click
+}
+
+// True while another held button still holds the same action down.
+bool Device::holding(Act a) const {
+    for (int i = 0; i < kControlCount; i++)
+        if (held_[i] && heldAct_[i] == a) return true;
+    return false;
 }
 
 Device::~Device() { releaseAll(); }
@@ -416,6 +425,8 @@ void Device::onButtons(const Report& r) {
 void Device::onPress(Control c) {
     int i = static_cast<int>(c);
     const Binding& b = cfg_.button(c);
+    // Two buttons holding the right Command key press it once and let it go with the last one.
+    bool alreadyDown = b.act == Act::RightCommand && holding(Act::RightCommand);
     held_[i] = true;
     heldAct_[i] = b.act;
     switch (b.act) {
@@ -424,6 +435,9 @@ void Device::onPress(Control c) {
             break;
         case Act::MiddleClick: out_.button(kButtonMiddle, true, 0); break;
         case Act::CmdClick: out_.button(kButtonLeft, true, kCmd); break;
+        case Act::RightCommand:
+            if (!alreadyDown) out_.modifier(kKeyRightCommand, true);
+            break;
         default: perform(b.act, b.keys); break;
     }
 }
@@ -438,6 +452,9 @@ void Device::onRelease(Control c) {
             break;
         case Act::MiddleClick: out_.button(kButtonMiddle, false, 0); break;
         case Act::CmdClick: out_.button(kButtonLeft, false, kCmd); break;
+        case Act::RightCommand:
+            if (!holding(Act::RightCommand)) out_.modifier(kKeyRightCommand, false);
+            break;
         default: break;
     }
 }
@@ -466,6 +483,10 @@ void Device::perform(Act a, const Shortcut& keys) {
         case Act::SpaceLeft: out_.key({kKeyLeft, kCtrl}); break;
         case Act::SpaceRight: out_.key({kKeyRight, kCtrl}); break;
         case Act::WheelMode: toggleWheelMode(); break;
+        case Act::RightCommand:
+            out_.modifier(kKeyRightCommand, true);
+            out_.modifier(kKeyRightCommand, false);
+            break;
         case Act::Shortcut:
             if (keys.valid()) out_.key(keys);
             break;

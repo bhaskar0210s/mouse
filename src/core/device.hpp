@@ -100,6 +100,7 @@ private:
     void onBattery(const hidpp::Report& r);
     void forgetDeviceState();
     void releaseAll();
+    bool holding(Act a) const;
 
     Transport& t_;
     Output& out_;

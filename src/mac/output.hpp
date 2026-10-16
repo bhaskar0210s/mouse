@@ -16,6 +16,7 @@ public:
     void dock(Dock d) override;
     void media(int key) override;
     void dictation() override;
+    void modifier(uint16_t key, bool down) override;
     void navigate(bool forward) override;
     void scroll(int dy, int dx, bool continuous) override;
 

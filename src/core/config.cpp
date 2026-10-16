@@ -80,6 +80,7 @@ constexpr ActEntry kActs[] = {
     {Act::SpaceRight, "space-right", "Next desktop"},
     {Act::WheelMode, "wheel-mode", "Switch wheel mode"},
     {Act::Gestures, "gestures", "Gestures"},
+    {Act::RightCommand, "right-command", "Right Command key"},
     {Act::Shortcut, "shortcut", "Keyboard shortcut"},
 };
 
@@ -263,6 +264,7 @@ std::vector<Act> buttonMenu(Control c) {
                           Act::Dictation, Act::None,         Act::PlayPause,   Act::Mute,     Act::None,
                           Act::WheelMode};
     if (c == Control::Thumb) m.push_back(Act::Gestures);
+    m.push_back(Act::RightCommand);
     m.push_back(Act::Shortcut);
     return m;
 }
@@ -331,7 +333,9 @@ Config parseConfig(const std::string& text) {
         for (int i = 0; i < kDirCount && !handled; i++) {
             if (key == std::string("gesture.") + kDirKeys[i]) {
                 Act a;
-                if (parseAct(val, a) && a != Act::Gestures && a != Act::Shortcut) c.gestures[i] = a;
+                // A gesture happens at one moment: nothing to hold, no shortcut of its own.
+                if (parseAct(val, a) && a != Act::Gestures && a != Act::Shortcut && a != Act::RightCommand)
+                    c.gestures[i] = a;
                 handled = true;
             }
         }

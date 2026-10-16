@@ -14,6 +14,7 @@
 #include <sys/file.h>
 #include <spawn.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -75,9 +76,14 @@ std::string sha256(const std::string& path) {
     CC_SHA256_CTX ctx;
     CC_SHA256_Init(&ctx);
     unsigned char buf[65536];
-    size_t n;
-    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) CC_SHA256_Update(&ctx, buf, static_cast<CC_LONG>(n));
+    for (;;) {
+        size_t n = std::fread(buf, 1, sizeof buf, f);
+        CC_SHA256_Update(&ctx, buf, static_cast<CC_LONG>(n));
+        if (n < sizeof buf) break;  // end of the file, or an error (caught below)
+    }
+    bool failed = std::ferror(f) != 0;
     std::fclose(f);
+    if (failed) return "";
     unsigned char md[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256_Final(md, &ctx);
     static const char* hex = "0123456789abcdef";
@@ -164,6 +170,12 @@ bool signedLikeUs(const std::string& app) {
 
 void note(const std::string& text) { writeFileAtomic(dataDir() + "/update-note", text); }
 
+std::string systemVersion() {
+    char buf[64] = {};
+    size_t size = sizeof buf - 1;
+    return sysctlbyname("kern.osproductversion", buf, &size, nullptr, 0) == 0 ? buf : "";
+}
+
 }  // namespace
 
 std::string currentBundlePath() {
@@ -244,6 +256,9 @@ int runUpdate() {
     std::string fresh = stage + "/x/Mouse.app";
     if (bundleValue(fresh, CFSTR("CFBundleIdentifier")) != "app.mouse.Mouse") return fail();
     if (compareVersions(bundleValue(fresh, CFSTR("CFBundleShortVersionString")), MOUSE_VERSION) <= 0) return fail();
+    // A release made for a newer macOS than this one is left alone.
+    std::string needs = bundleValue(fresh, CFSTR("LSMinimumSystemVersion")), have = systemVersion();
+    if (needs.empty() || have.empty() || compareVersions(needs, have) > 0) return fail();
     if (!signedLikeUs(fresh)) return fail();
 
     std::string old = parent + "/.Mouse-old-" + std::to_string(getpid()) + ".app";

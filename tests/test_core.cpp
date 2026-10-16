@@ -104,13 +104,28 @@ TEST(action_ids_round_trip) {
         CHECK(parseWheelAct(wheelActId(w), back));
         CHECK(back == w);
     }
-    // Gestures only appear in the thumb button's menu.
+    // Gestures only appear in the thumb button's menu; the right Command key in every button's.
     for (int c = 0; c < kControlCount; c++) {
         auto m = buttonMenu(static_cast<Control>(c));
-        bool has = false;
-        for (Act a : m) has = has || a == Act::Gestures;
+        bool has = false, rightCommand = false;
+        for (Act a : m) {
+            has = has || a == Act::Gestures;
+            rightCommand = rightCommand || a == Act::RightCommand;
+        }
         CHECK(has == (static_cast<Control>(c) == Control::Thumb));
+        CHECK(rightCommand);
     }
+    for (Act a : gestureMenu()) CHECK(a != Act::RightCommand);  // nothing to hold in a gesture
+}
+
+TEST(config_right_command) {
+    Config c = parseConfig("middle = right-command\nthumb = right-command\ngesture.up = right-command\n");
+    CHECK(c.button(Control::Middle).act == Act::RightCommand);
+    CHECK(c.button(Control::Thumb).act == Act::RightCommand);
+    CHECK(c.gestures[static_cast<int>(Dir::Up)] == Config{}.gestures[static_cast<int>(Dir::Up)]);  // ignored
+    CHECK(parseConfig(serializeConfig(c)) == c);
+    CHECK(serializeConfig(c).find("middle = right-command") != std::string::npos);
+    CHECK_EQ(std::string(actName(Act::RightCommand)), std::string("Right Command key"));
 }
 
 TEST(sensitivity_and_dpi_scales) {

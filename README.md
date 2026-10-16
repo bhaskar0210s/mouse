@@ -13,7 +13,8 @@ thumb-button gestures, pointer speed and scrolling without Logi Options+.
 
 - **Buttons**: middle, back, forward, thumb and top buttons, plus the thumb wheel. Pick from a
   short list of useful actions (Mission Control, App Exposé, Dictation, ⌘-click, switch apps,
-  play/pause and more) or record any keyboard shortcut.
+  play/pause and more), hold the right Command key (the trigger many dictation apps use) or
+  record any keyboard shortcut.
 - **Gestures**: hold the thumb button and move the mouse up, down, left or right.
 - **Point & Scroll**: pointer speed (200–8000 DPI), scrolling speed and direction, smooth
   scrolling, wheel mode (auto-shift, ratchet or free spin) and thumb-wheel speed and direction.

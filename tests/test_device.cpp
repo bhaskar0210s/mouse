@@ -542,3 +542,66 @@ TEST(device_recovers_from_a_lost_reply) {
     r.dev.restore();
     CHECK_EQ(int(r.mouse.wheelMode), 0);
 }
+
+TEST(device_right_command_is_held_as_long_as_the_button) {
+    Rig r;
+    Config c;
+    c.button(Control::Middle).act = Act::RightCommand;
+    c.button(Control::Back).act = Act::RightCommand;
+    r.dev.apply(c, true, true);
+    r.mouse.press(0x52);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("modifier 54 down"));
+    r.mouse.release(0x52);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("modifier 54 up"));
+    CHECK(r.mouse.nativeLog.empty());  // diverted: the firmware did not middle-click as well
+
+    // Two buttons: the key goes down once and comes up with the last one.
+    r.out.clear();
+    r.mouse.press(0x52);
+    r.pump();
+    r.mouse.press(0x53);
+    r.pump();
+    r.mouse.release(0x52);
+    r.pump();
+    CHECK_EQ(r.out.log.size(), size_t(1));
+    r.mouse.release(0x53);
+    r.pump();
+    CHECK_EQ(r.out.log.size(), size_t(2));
+    CHECK_EQ(r.out.last(), std::string("modifier 54 up"));
+
+    // Settings change while held: let go right away, once.
+    r.out.clear();
+    r.mouse.press(0x52);
+    r.pump();
+    c.button(Control::Middle).act = Act::Dictation;
+    r.dev.apply(c, true, true);
+    CHECK_EQ(r.out.last(), std::string("modifier 54 up"));
+    r.mouse.release(0x52);
+    r.pump();
+    CHECK_EQ(r.out.log.size(), size_t(2));
+
+    // The agent stops while the key is held.
+    r.out.clear();
+    r.mouse.press(0x53);
+    r.pump();
+    r.dev.restore();
+    CHECK_EQ(r.out.last(), std::string("modifier 54 up"));
+
+    // The mouse goes away while the key is held.
+    Recorder out;
+    {
+        MXMaster3S m;
+        SimTransport link{m};
+        Device d{link, out};
+        CHECK(d.start());
+        Config k;
+        k.button(Control::Thumb).act = Act::RightCommand;
+        d.apply(k, true, true);
+        m.press(0xC3);
+        link.pump(d);
+        CHECK_EQ(out.last(), std::string("modifier 54 down"));
+    }
+    CHECK_EQ(out.last(), std::string("modifier 54 up"));
+}

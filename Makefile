@@ -1,5 +1,5 @@
 APP       := Mouse
-VERSION   := 1.0.3
+VERSION   := 1.0.4
 BUILD     := build
 BUNDLE    := $(BUILD)/$(APP).app
 BINARY    := $(BUNDLE)/Contents/MacOS/$(APP)
@@ -24,6 +24,9 @@ OPT       ?= -Oz -flto
 LTOFLAGS  ?= -flto
 CXXFLAGS  += $(ARCHFLAGS) -std=c++20 $(OPT) $(WARN) -fvisibility=hidden -MMD -MP -DMOUSE_VERSION=\"$(VERSION)\" -Isrc
 OBJCFLAGS := -fobjc-arc
+# The C++ code neither catches exceptions nor asks for types at run time (a throw ends the process
+# either way); without both, the agent fits a 16 KB page less. AppKit's Objective-C++ keeps them.
+CPPFLAGS_ONLY := -fno-exceptions -fno-rtti
 LDFLAGS   += $(ARCHFLAGS) $(LTOFLAGS) -dead_strip
 
 CORE_SRC  := $(wildcard src/core/*.cpp)
@@ -99,7 +102,7 @@ $(HELPER)/Contents/Resources/MouseAgent.icns: $(AGENT_ICON)
 
 $(BUILD)/obj/%.o: src/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS_ONLY) -c $< -o $@
 
 $(BUILD)/obj/%.o: src/%.mm
 	@mkdir -p $(@D)

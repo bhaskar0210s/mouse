@@ -65,10 +65,11 @@ bool readFile(const std::string& path, std::string& out) {
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return false;
     char buf[4096];
-    size_t n;
-    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) {
+    for (;;) {
+        size_t n = std::fread(buf, 1, sizeof buf, f);
         out.append(buf, n);
-        if (out.size() > (1 << 20)) break;  // settings files are tiny; refuse anything huge
+        // A short read is the end of the file (or an error); settings files are tiny, so stop at 1 MB.
+        if (n < sizeof buf || out.size() > (1 << 20)) break;
     }
     std::fclose(f);
     return true;

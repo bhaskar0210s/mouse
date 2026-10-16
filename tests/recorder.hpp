@@ -23,6 +23,9 @@ struct Recorder : mouse::Output {
     }
     void media(int k) override { log.push_back("media " + std::to_string(k)); }
     void dictation() override { log.push_back("dictation"); }
+    void modifier(uint16_t key, bool down) override {
+        log.push_back("modifier " + std::to_string(key) + (down ? " down" : " up"));
+    }
     void navigate(bool forward) override { log.push_back(forward ? "navigate forward" : "navigate back"); }
     void scroll(int dy, int dx, bool continuous) override {
         scrolledY += dy;

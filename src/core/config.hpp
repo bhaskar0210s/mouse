@@ -44,9 +44,10 @@ enum class Act : uint8_t {
     Mute,
     SpaceLeft,
     SpaceRight,
-    WheelMode,  // toggle ratchet / free spin
-    Gestures,   // thumb button only: click + hold-and-move
-    Shortcut,   // the binding's keyboard shortcut
+    WheelMode,     // toggle ratchet / free spin
+    Gestures,      // thumb button only: click + hold-and-move
+    RightCommand,  // the right Command key, held as long as the button (dictation apps use it)
+    Shortcut,      // the binding's keyboard shortcut
 };
 
 // What the thumb wheel does.

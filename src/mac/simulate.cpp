@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
         void dock(Dock d) override { std::printf("dock %d\n", static_cast<int>(d)); if (!dry) real->dock(d); }
         void media(int k) override { std::printf("media %d\n", k); if (!dry) real->media(k); }
         void dictation() override { std::printf("dictation\n"); if (!dry) real->dictation(); }
+        void modifier(uint16_t k, bool d) override { std::printf("modifier 0x%x %s\n", k, d ? "down" : "up"); if (!dry) real->modifier(k, d); }
         void navigate(bool f) override { std::printf("navigate %s\n", f ? "forward" : "back"); if (!dry) real->navigate(f); }
         void scroll(int dy, int dx, bool c) override { std::printf("scroll %d %d %s\n", dy, dx, c ? "px" : "lines"); if (!dry) real->scroll(dy, dx, c); }
     };

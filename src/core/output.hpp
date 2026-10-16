@@ -24,6 +24,8 @@ public:
     virtual void dock(Dock d) = 0;
     virtual void media(int key) = 0;                               // press and release
     virtual void dictation() = 0;
+    // A modifier key (virtual key code, e.g. 0x36 right Command) going down or up on its own.
+    virtual void modifier(uint16_t key, bool down) = 0;
     virtual void navigate(bool forward) = 0;                       // Back / Forward
     // Positive dy scrolls up (towards the top of a page), positive dx scrolls left.
     // continuous = pixel deltas like a trackpad; otherwise whole lines like a classic wheel.

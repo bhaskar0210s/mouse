@@ -38,6 +38,32 @@ constexpr Modifier kModifiers[] = {
     {kCmd, 0x37, NX_COMMANDMASK, NX_DEVICELCMDKEYMASK, kCGEventFlagMaskCommand},
 };
 
+// Every modifier key: its device-independent flag, its own device-dependent flag, and the other
+// side's (the device-independent flag stays while the other key of the pair is still down).
+struct ModifierKey {
+    uint16_t key;
+    uint32_t nx, device, otherSide;
+};
+
+constexpr ModifierKey kModifierKeys[] = {
+    {0x3B, NX_CONTROLMASK, NX_DEVICELCTLKEYMASK, NX_DEVICERCTLKEYMASK},
+    {0x3E, NX_CONTROLMASK, NX_DEVICERCTLKEYMASK, NX_DEVICELCTLKEYMASK},
+    {0x3A, NX_ALTERNATEMASK, NX_DEVICELALTKEYMASK, NX_DEVICERALTKEYMASK},
+    {0x3D, NX_ALTERNATEMASK, NX_DEVICERALTKEYMASK, NX_DEVICELALTKEYMASK},
+    {0x38, NX_SHIFTMASK, NX_DEVICELSHIFTKEYMASK, NX_DEVICERSHIFTKEYMASK},
+    {0x3C, NX_SHIFTMASK, NX_DEVICERSHIFTKEYMASK, NX_DEVICELSHIFTKEYMASK},
+    {0x37, NX_COMMANDMASK, NX_DEVICELCMDKEYMASK, NX_DEVICERCMDKEYMASK},
+    {0x36, NX_COMMANDMASK, NX_DEVICERCMDKEYMASK, NX_DEVICELCMDKEYMASK},
+};
+
+// Modifier state that belongs to the user (keys held down, Caps Lock) and is kept around ours.
+constexpr uint32_t kHeldFlags = NX_ALPHASHIFTMASK | NX_SHIFTMASK | NX_CONTROLMASK | NX_ALTERNATEMASK | NX_COMMANDMASK |
+                                NX_SECONDARYFNMASK | NX_DEVICELCTLKEYMASK | NX_DEVICELSHIFTKEYMASK |
+                                NX_DEVICERSHIFTKEYMASK | NX_DEVICELCMDKEYMASK | NX_DEVICERCMDKEYMASK |
+                                NX_DEVICELALTKEYMASK | NX_DEVICERALTKEYMASK | NX_DEVICERCTLKEYMASK;
+
+uint32_t heldFlags() { return static_cast<uint32_t>(CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState)) & kHeldFlags; }
+
 // Keys that macOS reports with the Fn flag (and arrows also with the keypad flag).
 uint32_t extraFlags(uint16_t key) {
     switch (key) {
@@ -100,11 +126,7 @@ void MacOutput::key(const Shortcut& s) {
     if (!s.valid()) return;
     // Modifiers that are down right now (keys the user is holding, Caps Lock) are restored after
     // the shortcut, which itself is sent with exactly its own modifiers.
-    constexpr uint32_t kHeld = NX_ALPHASHIFTMASK | NX_SHIFTMASK | NX_CONTROLMASK | NX_ALTERNATEMASK | NX_COMMANDMASK |
-                               NX_SECONDARYFNMASK | NX_DEVICELCTLKEYMASK | NX_DEVICELSHIFTKEYMASK |
-                               NX_DEVICERSHIFTKEYMASK | NX_DEVICELCMDKEYMASK | NX_DEVICERCMDKEYMASK |
-                               NX_DEVICELALTKEYMASK | NX_DEVICERALTKEYMASK | NX_DEVICERCTLKEYMASK;
-    uint32_t before = static_cast<uint32_t>(CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState)) & kHeld;
+    uint32_t before = heldFlags();
     uint32_t flags = before & NX_ALPHASHIFTMASK;
     uint16_t lastModifier = 0;
     for (const auto& m : kModifiers) {
@@ -126,6 +148,18 @@ void MacOutput::key(const Shortcut& s) {
     }
     // Leave the system exactly as it was (no Fn left over from an arrow key, held keys kept).
     if (now != before) post(NX_FLAGSCHANGED, lastModifier ? lastModifier : 0x3F, before);
+}
+
+// A modifier key on its own, like the real key: the flags of everything else held stay as they are.
+void MacOutput::modifier(uint16_t key, bool down) {
+    for (const auto& m : kModifierKeys) {
+        if (m.key != key) continue;
+        uint32_t now = heldFlags();
+        uint32_t flags = down ? now | m.nx | m.device : now & ~m.device;
+        if (!down && !(flags & m.otherSide)) flags &= ~m.nx;
+        post(NX_FLAGSCHANGED, key, flags);
+        return;
+    }
 }
 
 void MacOutput::dictation() {
