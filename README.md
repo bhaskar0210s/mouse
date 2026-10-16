@@ -19,9 +19,10 @@ once closed.
 
 - **Buttons**: middle, back, forward, thumb and top buttons, plus the thumb wheel. Pick from a
   short list of useful actions (Mission Control, App Exposé, Dictation, ⌘-click, switch apps,
-  play/pause and more) or record any keyboard shortcut, including a single key like right ⌘ or
-  left ⌥: the button then holds that key for as long as you hold it (the trigger many dictation
-  apps use).
+  play/pause and more) or record any keyboard shortcut. Buttons work like keys: tap **Switch to
+  last app** to go back to the previous app, or hold it to keep the app switcher open, point at
+  an app and let go. A shortcut can also be a single key like right ⌘ or left ⌥, held for as
+  long as the button (the trigger many dictation apps use).
 - **Per app**: give any app buttons, gestures and a thumb wheel of its own; every other app uses
   the layout for all apps. **Restore Defaults** puts a layout back.
 - **Gestures**: hold the thumb button and move the mouse up, down, left or right.

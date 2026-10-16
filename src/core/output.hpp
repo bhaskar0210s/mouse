@@ -27,6 +27,10 @@ public:
     virtual void dictation() = 0;
     // A modifier key (virtual key code, e.g. 0x36 right Command) going down or up on its own.
     virtual void modifier(uint16_t key, bool down) = 0;
+    // A shortcut held like on a keyboard: its modifiers go down and the key is pressed once; the
+    // modifiers stay down until keysUp (so ⌘⇥ keeps the app switcher open).
+    virtual void keysDown(const Shortcut& s) = 0;
+    virtual void keysUp(uint32_t mods) = 0;  // lets go of these modifiers
     virtual void navigate(bool forward) = 0;                       // Back / Forward
     // Positive dy scrolls up (towards the top of a page), positive dx scrolls left.
     // continuous = pixel deltas like a trackpad; otherwise whole lines like a classic wheel.

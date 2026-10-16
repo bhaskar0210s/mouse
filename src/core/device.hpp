@@ -101,6 +101,7 @@ private:
     void forgetDeviceState();
     void releaseAll();
     void letGoOfKey(int control);
+    void holdKeys(int control, const Shortcut& s);
     const Layout& layoutNow(double maxAge);
     void followGestures(bool gestures);
     void sendKeys(const Shortcut& s);
@@ -135,6 +136,7 @@ private:
     bool held_[kControlCount] = {};
     Act heldAct_[kControlCount] = {};
     uint16_t heldKey_[kControlCount] = {kNoKey, kNoKey, kNoKey, kNoKey, kNoKey};  // modifier held by a button
+    uint32_t heldMods_[kControlCount] = {};  // modifiers of a shortcut held by a button
     Act gestureActs_[kDirCount] = {};  // the gestures of the layout the thumb button was pressed in
     GestureTracker gesture_;
     ScrollEngine scroll_;

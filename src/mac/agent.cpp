@@ -613,6 +613,8 @@ int probe(double seconds) {
         void dock(Dock d) override { std::printf("  -> dock %d\n", static_cast<int>(d)); }
         void media(int k) override { std::printf("  -> media %d\n", k); }
         void dictation() override { std::printf("  -> dictation\n"); }
+        void keysDown(const Shortcut& s) override { std::printf("  -> keys down %s\n", shortcutDisplay(s).c_str()); }
+        void keysUp(uint32_t m) override { std::printf("  -> keys up %u\n", m); }
         void modifier(uint16_t k, bool d) override { std::printf("  -> modifier 0x%x %s\n", k, d ? "down" : "up"); }
         void navigate(bool f) override { std::printf("  -> navigate %s\n", f ? "forward" : "back"); }
         void scroll(int dy, int dx, bool c) override { std::printf("  -> scroll dy=%d dx=%d %s\n", dy, dx, c ? "px" : "lines"); }

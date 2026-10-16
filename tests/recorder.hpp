@@ -24,6 +24,8 @@ struct Recorder : mouse::Output {
     }
     void media(int k) override { log.push_back("media " + std::to_string(k)); }
     void dictation() override { log.push_back("dictation"); }
+    void keysDown(const mouse::Shortcut& s) override { log.push_back("keys down " + mouse::shortcutDisplay(s)); }
+    void keysUp(uint32_t mods) override { log.push_back("keys up " + std::to_string(mods)); }
     void modifier(uint16_t key, bool down) override {
         log.push_back("modifier " + std::to_string(key) + (down ? " down" : " up"));
     }

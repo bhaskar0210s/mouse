@@ -20,6 +20,8 @@ public:
     void media(int key) override;
     void dictation() override;
     void modifier(uint16_t key, bool down) override;
+    void keysDown(const Shortcut& s) override;
+    void keysUp(uint32_t mods) override;
     void navigate(bool forward) override;
     void scroll(int dy, int dx, bool continuous) override;
     std::string frontApp(double maxAge) override;

@@ -119,9 +119,10 @@ TEST(device_customised_setup_end_to_end) {
 
     r.mouse.press(0xC3);
     r.pump();
-    CHECK_EQ(r.out.last(), std::string("key ⌘⇥"));
+    CHECK_EQ(r.out.last(), std::string("keys down ⌘⇥"));  // ⌘ stays down while the button is held
     r.mouse.release(0xC3);
     r.pump();
+    CHECK_EQ(r.out.last(), std::string("keys up 8"));
 
     r.mouse.press(0xC4);
     r.pump();
@@ -394,10 +395,10 @@ TEST(device_middle_click_hold_and_multi_buttons) {
     CHECK_EQ(r.out.last(), std::string("button 2 down"));
     r.mouse.press(0x56);  // second button while the first is held
     r.pump();
-    CHECK_EQ(r.out.last(), std::string("key ⌘⇥"));
+    CHECK_EQ(r.out.last(), std::string("keys down ⌘⇥"));
     r.mouse.release(0x56);
     r.pump();
-    CHECK_EQ(r.out.last(), std::string("key ⌘⇥"));
+    CHECK_EQ(r.out.last(), std::string("keys up 8"));
     r.mouse.release(0x53);
     r.pump();
     CHECK_EQ(r.out.last(), std::string("button 2 up"));
@@ -663,9 +664,10 @@ TEST(device_app_layouts) {
     r.mouse.press(0xC3);
     r.pump();
     CHECK(!r.mouse.control(0xC3)->rawXY);
-    CHECK_EQ(r.out.last(), std::string("key ⌘⇥"));
+    CHECK_EQ(r.out.last(), std::string("keys down ⌘⇥"));
     r.mouse.release(0xC3);
     r.pump();
+    CHECK_EQ(r.out.last(), std::string("keys up 8"));
 
     // Back in another app, the thumb button makes gestures again (click = Mission Control).
     r.out.front = "com.example.other";
@@ -695,4 +697,130 @@ TEST(device_app_layouts) {
     Rig q;
     q.dev.apply(c, false, true);
     CHECK(!q.mouse.control(0x53)->divert);
+}
+
+// Switch to last app, and shortcuts on buttons, behave like keys held on a keyboard: a tap goes to
+// the last app, holding keeps the app switcher open until the button is let go.
+TEST(device_shortcuts_are_held_with_the_button) {
+    Rig r;
+    Config c;
+    c.button(Control::Thumb).act = Act::SwitchApp;
+    c.button(Control::Back) = {Act::Shortcut, parseShortcut("cmd+w")};
+    c.button(Control::Forward) = {Act::Shortcut, parseShortcut("f5")};
+    r.dev.apply(c, true, true);
+    CHECK(!r.mouse.control(0xC3)->rawXY);  // the pointer moves over the app switcher meanwhile
+
+    r.mouse.press(0xC3);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("keys down ⌘⇥"));
+    r.mouse.move(40, 0);  // pointing at another app in the switcher
+    r.pump();
+    CHECK_EQ(r.out.log.size(), size_t(1));
+    r.mouse.release(0xC3);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("keys up 8"));
+
+    // Two buttons holding ⌘: it comes up with the last one.
+    r.out.clear();
+    r.mouse.press(0xC3);
+    r.pump();
+    r.mouse.press(0x53);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("keys down ⌘W"));
+    r.mouse.release(0xC3);
+    r.pump();
+    CHECK_EQ(r.out.log.size(), size_t(2));  // ⌘ still held for the back button
+    r.mouse.release(0x53);
+    r.pump();
+    CHECK_EQ(r.out.last(), std::string("keys up 8"));
+
+    // A key without modifiers is simply pressed.
+    r.out.clear();
+    r.mouse.press(0x56);
+    r.pump();
+    r.mouse.release(0x56);
+    r.pump();
+    CHECK_EQ(r.out.log.size(), size_t(1));
+    CHECK_EQ(r.out.last(), std::string("key F5"));
+
+    // Settings change, or the mouse goes away, while held: ⌘ comes up.
+    r.out.clear();
+    r.mouse.press(0xC3);
+    r.pump();
+    r.dev.apply(c, true, true);
+    CHECK_EQ(r.out.last(), std::string("keys up 8"));
+    r.mouse.release(0xC3);
+    r.pump();
+    CHECK_EQ(r.out.log.size(), size_t(2));
+    Recorder out;
+    {
+        MXMaster3S m;
+        SimTransport link{m};
+        Device d{link, out};
+        CHECK(d.start());
+        d.apply(c, true, true);
+        m.press(0xC3);
+        link.pump(d);
+        CHECK_EQ(out.last(), std::string("keys down ⌘⇥"));
+    }
+    CHECK_EQ(out.last(), std::string("keys up 8"));
+
+    // As a gesture it is a single tap.
+    Rig g;
+    Config gc;
+    gc.gestures[static_cast<int>(Dir::Click)] = Act::SwitchApp;
+    g.dev.apply(gc, true, true);
+    g.mouse.press(0xC3);
+    g.pump();
+    g.mouse.release(0xC3);
+    g.pump();
+    CHECK_EQ(g.out.last(), std::string("key ⌘⇥"));
+}
+
+// Random presses and releases on buttons that hold keys, overlapping freely: whenever no button
+// is held, no key may be left down.
+TEST(device_held_keys_never_stick) {
+    Rig r;
+    Config c;
+    c.button(Control::Middle) = {Act::Shortcut, parseShortcut("right-cmd")};
+    c.button(Control::Back) = {Act::Shortcut, parseShortcut("cmd+w")};
+    c.button(Control::Forward) = {Act::Shortcut, parseShortcut("shift+cmd+t")};
+    c.button(Control::Thumb).act = Act::SwitchApp;
+    r.dev.apply(c, true, true);
+    const uint16_t cids[] = {0x52, 0x53, 0x56, 0xC3};
+    bool down[4] = {};
+    uint32_t mods = 0;  // modifiers held, replayed from what the device asked for
+    bool rightCmd = false;
+    size_t seen = 0;
+    std::mt19937 rng(5);
+    int idle = 0;
+    for (int step = 0; step < 4000; step++) {
+        int i = static_cast<int>(rng() % 4);
+        if (down[i]) r.mouse.release(cids[i]);
+        else r.mouse.press(cids[i]);
+        down[i] = !down[i];
+        r.pump();
+        for (; seen < r.out.log.size(); seen++) {
+            const std::string& e = r.out.log[seen];
+            if (e.rfind("keys down ", 0) == 0) {
+                std::string k = e.substr(10);
+                if (k.find("⌃") != std::string::npos) mods |= kCtrl;
+                if (k.find("⌥") != std::string::npos) mods |= kOpt;
+                if (k.find("⇧") != std::string::npos) mods |= kShift;
+                if (k.find("⌘") != std::string::npos) mods |= kCmd;
+            } else if (e.rfind("keys up ", 0) == 0) {
+                mods &= ~static_cast<uint32_t>(std::stoul(e.substr(8)));
+            } else if (e == "modifier 54 down") {
+                rightCmd = true;
+            } else if (e == "modifier 54 up") {
+                rightCmd = false;
+            }
+        }
+        if (!down[0] && !down[1] && !down[2] && !down[3]) {
+            idle++;
+            CHECK_EQ(mods, 0u);
+            CHECK(!rightCmd);
+        }
+    }
+    CHECK(idle > 100);  // the sequence really came back to rest many times
 }

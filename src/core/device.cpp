@@ -397,15 +397,25 @@ void Device::releaseAll() {
     gesture_.end();  // a gesture in progress is dropped, never turned into a click
 }
 
-// The modifier key that button i holds (a one-key shortcut) comes up, unless another held button
-// still holds the same key.
+// What button i holds on the keyboard comes up: a modifier key alone, or the modifiers of a
+// shortcut. Anything another held button still holds stays down.
 void Device::letGoOfKey(int i) {
     uint16_t key = heldKey_[i];
     heldKey_[i] = kNoKey;
-    if (key == kNoKey) return;
-    for (uint16_t k : heldKey_)
-        if (k == key) return;
-    out_.modifier(key, false);
+    if (key != kNoKey) {
+        bool other = false;
+        for (uint16_t k : heldKey_) other = other || k == key;
+        if (!other) out_.modifier(key, false);
+    }
+    uint32_t mods = heldMods_[i];
+    heldMods_[i] = 0;
+    for (uint32_t m : heldMods_) mods &= ~m;
+    if (mods) out_.keysUp(mods);
+}
+
+void Device::holdKeys(int i, const Shortcut& s) {
+    heldMods_[i] = s.mods;
+    out_.keysDown(s);
 }
 
 const Layout& Device::layoutNow(double maxAge) {
@@ -484,8 +494,11 @@ void Device::onPress(Control c) {
             break;
         case Act::MiddleClick: out_.button(kButtonMiddle, true, 0); break;
         case Act::CmdClick: out_.button(kButtonLeft, true, kCmd); break;
+        case Act::SwitchApp: holdKeys(i, {kKeyTab, kCmd}); break;  // tap: last app; hold: pick one
         case Act::Shortcut:
-            if (b.keys.valid() && isModifierKey(b.keys.key)) {
+            if (b.keys.valid() && b.keys.mods && !isModifierKey(b.keys.key)) {
+                holdKeys(i, b.keys);  // like a keyboard: the modifiers stay down with the button
+            } else if (b.keys.valid() && isModifierKey(b.keys.key)) {
                 // A modifier key alone is held as long as the button; two buttons holding the same
                 // key press it once and let it go with the last one.
                 bool down = false;

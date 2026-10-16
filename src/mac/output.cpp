@@ -29,14 +29,15 @@ struct Modifier {
     uint16_t key;      // left-hand key code
     uint32_t nx;       // device independent flag
     uint32_t device;   // device dependent (left key) flag
+    uint32_t right;    // device dependent flag of the right-hand key
     CGEventFlags cg;
 };
 
 constexpr Modifier kModifiers[] = {
-    {kCtrl, 0x3B, NX_CONTROLMASK, NX_DEVICELCTLKEYMASK, kCGEventFlagMaskControl},
-    {kOpt, 0x3A, NX_ALTERNATEMASK, NX_DEVICELALTKEYMASK, kCGEventFlagMaskAlternate},
-    {kShift, 0x38, NX_SHIFTMASK, NX_DEVICELSHIFTKEYMASK, kCGEventFlagMaskShift},
-    {kCmd, 0x37, NX_COMMANDMASK, NX_DEVICELCMDKEYMASK, kCGEventFlagMaskCommand},
+    {kCtrl, 0x3B, NX_CONTROLMASK, NX_DEVICELCTLKEYMASK, NX_DEVICERCTLKEYMASK, kCGEventFlagMaskControl},
+    {kOpt, 0x3A, NX_ALTERNATEMASK, NX_DEVICELALTKEYMASK, NX_DEVICERALTKEYMASK, kCGEventFlagMaskAlternate},
+    {kShift, 0x38, NX_SHIFTMASK, NX_DEVICELSHIFTKEYMASK, NX_DEVICERSHIFTKEYMASK, kCGEventFlagMaskShift},
+    {kCmd, 0x37, NX_COMMANDMASK, NX_DEVICELCMDKEYMASK, NX_DEVICERCMDKEYMASK, kCGEventFlagMaskCommand},
 };
 
 // Every modifier key: its device-independent flag, its own device-dependent flag, and the other
@@ -182,6 +183,35 @@ void MacOutput::key(const Shortcut& s) {
     }
     // Leave the system exactly as it was (no Fn left over from an arrow key, held keys kept).
     if (now != before) post(NX_FLAGSCHANGED, lastModifier ? lastModifier : 0x3F, before);
+}
+
+// A shortcut held like on a keyboard: modifiers down (on top of whatever is held already), the key
+// pressed once, the modifiers left down for keysUp.
+void MacOutput::keysDown(const Shortcut& s) {
+    if (!s.valid()) return;
+    uint32_t flags = heldFlags();
+    uint16_t lastModifier = 0;
+    for (const auto& m : kModifiers) {
+        if (!(s.mods & m.bit)) continue;
+        flags |= m.nx | m.device;
+        post(NX_FLAGSCHANGED, m.key, flags);
+        lastModifier = m.key;
+    }
+    uint32_t keyFlags = flags | extraFlags(s.key) | ((s.mods & kFn) ? NX_SECONDARYFNMASK : 0);
+    post(NX_KEYDOWN, s.key, keyFlags);
+    post(NX_KEYUP, s.key, keyFlags);
+    if (keyFlags != flags) post(NX_FLAGSCHANGED, lastModifier ? lastModifier : 0x3F, flags);  // no Fn left over
+}
+
+void MacOutput::keysUp(uint32_t mods) {
+    uint32_t flags = heldFlags();
+    for (int i = 3; i >= 0; i--) {
+        const auto& m = kModifiers[i];
+        if (!(mods & m.bit)) continue;
+        flags &= ~m.device;
+        if (!(flags & m.right)) flags &= ~m.nx;  // a right-hand key still down keeps the modifier
+        post(NX_FLAGSCHANGED, m.key, flags);
+    }
 }
 
 // A modifier key on its own, like the real key: the flags of everything else held stay as they are.

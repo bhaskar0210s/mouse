@@ -1,5 +1,5 @@
 APP       := Mouse
-VERSION   := 1.0.7
+VERSION   := 1.0.8
 BUILD     := build
 BUNDLE    := $(BUILD)/$(APP).app
 BINARY    := $(BUNDLE)/Contents/MacOS/$(APP)
@@ -109,7 +109,7 @@ $(BUILD)/obj/%.o: src/%.mm
 	$(CXX) $(CXXFLAGS) $(OBJCFLAGS) -c $< -o $@
 
 # Tests build the portable core and the simulator only (no AppKit), with sanitizers.
-TESTFLAGS := -std=c++20 -O1 -g $(WARN) -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer -DMOUSE_VERSION=\"$(VERSION)\"
+TESTFLAGS := -std=c++20 -O1 -g $(WARN) -Isrc -fsanitize=address,undefined -fno-omit-frame-pointer -MMD -MP -DMOUSE_VERSION=\"$(VERSION)\"
 
 $(BUILD)/test/%.o: tests/%.cpp
 	@mkdir -p $(@D)
