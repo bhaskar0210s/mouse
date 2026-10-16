@@ -7,9 +7,14 @@ thumb-button gestures, pointer speed and scrolling without Logi Options+.
 
 |                         | Mouse            | Logi Options+     |
 | ----------------------- | ---------------- | ----------------- |
-| Memory in the background | about **2 MB**   | about 180 MB      |
+| Memory in the background | **2–3 MB**       | about 180 MB      |
 | Download                | about 0.2 MB     | hundreds of MB    |
 | Account, telemetry, ads | none             | yes               |
+
+Memory is the background agent's footprint (the number Activity Monitor shows), measured with
+`footprint` on macOS 27 with the mouse connected: 2.1 MB at rest, up to about 2.8 MB once it has
+been sending clicks, keys and scrolling. The settings window takes about 24 MB while it is open
+and nothing once closed.
 
 - **Buttons**: middle, back, forward, thumb and top buttons, plus the thumb wheel. Pick from a
   short list of useful actions (Mission Control, App Exposé, Dictation, ⌘-click, switch apps,
