@@ -1,6 +1,6 @@
-// Popup button and its list. The list is a borderless child panel with menu material that shows
-// and hides instantly (NSMenu fades out), highlights on hover, selects on click or press-drag-release,
-// and handles arrow keys, Return and Esc. Clicking anywhere else closes it.
+// Popup button, pull-down button and their list. The list is a borderless child panel with menu
+// material that shows and hides instantly (NSMenu fades out), highlights on hover, selects on click
+// or press-drag-release, and handles arrow keys, Return and Esc. Clicking anywhere else closes it.
 #import "ui/ui.hpp"
 
 #include <algorithm>
@@ -18,6 +18,13 @@ static const CGFloat kPopupPadL = 8;  // title x inside the popup button
 static const CGFloat kChevronW = 16;
 static const CGFloat kImage = 16;      // item images
 static const CGFloat kImageGap = 6;
+static const CGFloat kPullGap = 4;     // between a pull-down button and its list
+static const CGFloat kPullPadL = 12;   // title x inside a pull-down button
+static const CGFloat kPullPadR = 10;   // right of its chevron
+
+@interface MPopup ()
+- (BOOL)pullsDown;
+@end
 
 static bool hasImages(const std::vector<MenuItem>& items) {
     for (const MenuItem& it : items)
@@ -204,21 +211,30 @@ static NSImage* roundedMask(CGFloat r) {
     for (size_t i = 0; i < popup.items.size(); i++) {
         const MenuItem& it = popup.items[i];
         if (it.tag >= 0) w = std::max(w, textWidth(it.title, f));
-        if (it.tag == popup.selectedTag && selIndex < 0) selIndex = (NSInteger)i;
+        if (it.tag >= 0 && it.tag == popup.selectedTag && selIndex < 0) selIndex = (NSInteger)i;
         h += it.tag < 0 ? kSepH : kItemH;
     }
     CGFloat imageColumn = hasImages(popup.items) ? kImage + kImageGap : 0;
-    w = std::ceil(std::max(kTextX + imageColumn + w + kRightPad, popup.bounds.size.width + kTextX - [popup textInset] + 8));
+    BOOL pull = popup.pullsDown;
+    CGFloat minW = pull ? popup.bounds.size.width : popup.bounds.size.width + kTextX - [popup textInset] + 8;
+    w = std::ceil(std::max(kTextX + imageColumn + w + kRightPad, minW));
 
-    // Line the current item up with the button's title, like a native popup menu.
     NSRect btn = [parent convertRectToScreen:[popup convertRect:popup.bounds toView:nil]];
-    CGFloat x = NSMinX(btn) + [popup textInset] - kTextX;
-    CGFloat itemMid = selIndex >= 0 ? [_list offsetOf:selIndex] + kItemH / 2 : kPadV + kItemH / 2;
-    CGFloat top = NSMidY(btn) + itemMid;  // screen coordinates grow upwards
-    NSRect frame = NSMakeRect(x, top - h, w, h);
+    NSRect frame;
+    if (pull) {
+        // Right below the button, like a native pull-down menu.
+        frame = NSMakeRect(NSMinX(btn), NSMinY(btn) - kPullGap - h, w, h);
+    } else {
+        // Line the current item up with the button's title, like a native popup menu.
+        CGFloat x = NSMinX(btn) + [popup textInset] - kTextX;
+        CGFloat itemMid = selIndex >= 0 ? [_list offsetOf:selIndex] + kItemH / 2 : kPadV + kItemH / 2;
+        CGFloat top = NSMidY(btn) + itemMid;  // screen coordinates grow upwards
+        frame = NSMakeRect(x, top - h, w, h);
+    }
     NSScreen* screen = parent.screen ?: NSScreen.mainScreen;
     if (screen) {
         NSRect vf = NSInsetRect(screen.visibleFrame, 4, 4);
+        if (pull && NSMinY(frame) < NSMinY(vf)) frame.origin.y = NSMaxY(btn) + kPullGap;  // no room below: above
         if (NSMinY(frame) < NSMinY(vf)) frame.origin.y = NSMinY(vf);
         if (NSMaxY(frame) > NSMaxY(vf)) frame.origin.y = NSMaxY(vf) - h;
         if (NSMaxX(frame) > NSMaxX(vf)) frame.origin.x = NSMaxX(vf) - w;
@@ -361,10 +377,12 @@ static NSImage* roundedMask(CGFloat r) {
 
 - (const std::vector<MenuItem>&)items { return _items; }
 - (CGFloat)textInset { return kPopupPadL; }
+- (BOOL)pullsDown { return NO; }
 
 - (void)setItems:(const std::vector<MenuItem>&)items selected:(int)tag {
     _items = items;
     _selectedTag = tag;
+    if (self.pullsDown) return;  // keeps its own title and size
     _title = @"";
     _image = nil;
     for (const MenuItem& it : _items) {
@@ -381,6 +399,10 @@ static NSImage* roundedMask(CGFloat r) {
 
 - (void)choose:(int)tag {
     NS_VALID_UNTIL_END_OF_SCOPE MPopup* keep = self;
+    if (self.pullsDown) {  // a command: nothing to select
+        if (_onSelect) _onSelect(tag);
+        return;
+    }
     if (tag == _selectedTag) return;
     CGFloat right = NSMaxX(self.frame);
     [self setItems:_items selected:tag];
@@ -442,6 +464,42 @@ static NSImage* roundedMask(CGFloat r) {
     return YES;
 }
 - (BOOL)accessibilityPerformShowMenu { return [self accessibilityPerformPress]; }
+
+@end
+
+// ============================================================================ MPullDown
+
+static NSImage* pullChevron() {
+    static NSImage* img = symbol(@"chevron.down", 9, NSFontWeightSemibold);
+    return img;
+}
+
+@implementation MPullDown {
+    NSString* _text;
+}
+
+- (instancetype)initWithTitle:(NSString*)title {
+    CGFloat w = std::ceil(kPullPadL + textWidth(title, font(13)) + 6 + pullChevron().size.width + kPullPadR);
+    if ((self = [super initWithFrame:NSMakeRect(0, 0, w, 24)])) {
+        _text = [title copy];
+        self.label = title;
+    }
+    return self;
+}
+
+- (BOOL)pullsDown { return YES; }
+- (CGFloat)textInset { return kPullPadL; }
+
+- (void)drawRect:(NSRect)dirty {
+    NSRect b = drawBezel(self, self.pressed);
+    drawText(self, _text, font(13), [NSColor labelColor], kPullPadL, NSMidY(b));
+    NSImage* chevron = pullChevron();
+    drawSymbol(self, chevron, NSMakePoint(NSMaxX(self.bounds) - kPullPadR - chevron.size.width / 2, NSMidY(b)),
+               [NSColor secondaryLabelColor]);
+}
+
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityMenuButtonRole; }
+- (id)accessibilityValue { return nil; }
 
 @end
 

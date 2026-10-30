@@ -103,7 +103,8 @@ static const CGFloat kSpacing = 8;     // between trailing controls
             for (auto it = r.trailing.rbegin(); it != r.trailing.rend(); ++it) {
                 NSView* v = *it;
                 NSSize sz = v.frame.size;
-                CGFloat pad = [v isKindOfClass:[MPopup class]] ? 0 : 6;  // non-popups align to the padding
+                BOOL borderless = [v isKindOfClass:[MPopup class]] && ![v isKindOfClass:[MPullDown class]];
+                CGFloat pad = borderless ? 0 : 6;  // controls with an edge align to the padding
                 x -= sz.width + pad;
                 v.frame = NSMakeRect(snap(self, x), snap(self, mid - sz.height / 2), sz.width, sz.height);
                 x -= kSpacing - pad;

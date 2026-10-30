@@ -10,7 +10,7 @@
 using namespace ui;
 
 static const CGFloat kWidth = 720;
-static const CGFloat kHeight = 560;
+static const CGFloat kHeight = 600;
 static const CGFloat kMargin = 24;
 static const CGFloat kFooterH = 44;
 static const CGFloat kBannerH = 40;
@@ -407,7 +407,7 @@ static NSScrollView* makeScroll(NSView* document) {
 }
 
 - (void)setConfig:(const mouse::Config&)config {
-    std::string shown = _app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size()) ? _cfg.apps[static_cast<size_t>(_app)].bundleId : "";
+    std::string shown = [self showsApp] ? _cfg.apps[static_cast<size_t>(_app)].bundleId : "";
     _cfg = config;
     _app = -1;
     for (size_t i = 0; i < _cfg.apps.size(); i++)
@@ -563,23 +563,19 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
         }
     }
 
-    // Which app the layout is for, and a way back to the defaults.
+    // Which app the layout is for, and what can be done with that layout.
     FormSection apps;
     FormRow appRow;
     appRow.title = @"Applies to";
     appRow.icon = rowIcon(@"macwindow");
     appRow.height = kRowH;
-    MButton* reset = [[MButton alloc] initWithTitle:@"Restore Defaults"];
-    reset.onPress = ^{
-        [weakSelf restoreDefaults];
-    };
     MPopup* appPopup = [self popupWithItems:[self appItems] selected:static_cast<int>(_app + 1) label:@"Applies to"];
     appPopup.onSelect = ^(int tag) {
         [weakSelf chooseApp:tag];
     };
-    appRow.trailing.push_back(reset);
     appRow.trailing.push_back(appPopup);
     apps.rows.push_back(appRow);
+    apps.rows.push_back([self layoutActions]);
 
     std::vector<FormSection> sections;
     sections.push_back(std::move(apps));
@@ -610,14 +606,18 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
 
 // ---------------------------------------------------------------------------- apps
 
+- (BOOL)showsApp { return _app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size()); }
+
 // The layout the Buttons page shows and changes: the one for all apps, or an app's own.
 - (mouse::Layout&)shownLayout {
-    if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size())) return _cfg.apps[static_cast<size_t>(_app)];
+    if ([self showsApp]) return _cfg.apps[static_cast<size_t>(_app)];
     return _cfg;
 }
 
-// App items are 1 + their index; "Copy Buttons from" items are kCopyFrom + the source app's index.
-static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001, kCopyFrom = 2000;
+// Tags of the app list and of Copy From: all apps, then each app as 1 + its index.
+static const int kAllApps = 0, kAddApp = 1000;
+
+static NSImage* allAppsIcon() { return symbol(@"square.grid.2x2", 12, NSFontWeightRegular); }
 
 - (NSImage*)iconForApp:(const std::string&)bundleId {
     NSString* key = str(bundleId);
@@ -636,21 +636,11 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001, kCopyFrom = 20
 
 - (std::vector<MenuItem>)appItems {
     std::vector<MenuItem> items;
-    items.push_back({@"All Apps", kAllApps, symbol(@"square.grid.2x2", 12, NSFontWeightRegular)});
+    items.push_back({@"All Apps", kAllApps, allAppsIcon()});
     for (size_t i = 0; i < _cfg.apps.size(); i++)
         items.push_back({str(_cfg.apps[i].name), static_cast<int>(i) + 1, [self iconForApp:_cfg.apps[i].bundleId]});
-    // The layout shown can take the buttons of any other app set up already.
-    bool copies = false;
-    for (size_t i = 0; i < _cfg.apps.size(); i++) {
-        if (static_cast<NSInteger>(i) == _app) continue;
-        if (!copies) items.push_back({nil, -1});
-        copies = true;
-        items.push_back({[NSString stringWithFormat:@"Copy Buttons from “%@”", str(_cfg.apps[i].name)], kCopyFrom + static_cast<int>(i)});
-    }
     items.push_back({nil, -1});
     items.push_back({@"Add App…", kAddApp});
-    if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size()))
-        items.push_back({[NSString stringWithFormat:@"Remove “%@”", str(_cfg.apps[static_cast<size_t>(_app)].name)], kRemoveApp});
     return items;
 }
 
@@ -659,24 +649,70 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001, kCopyFrom = 20
         [self addApp];
         return;
     }
-    if (tag >= kCopyFrom) {
-        // The shown layout (all apps, or one app) becomes a copy of another app's.
-        size_t from = static_cast<size_t>(tag - kCopyFrom);
-        if (from < _cfg.apps.size() && static_cast<NSInteger>(from) != _app) {
-            mouse::Layout copy = _cfg.apps[from];
-            [self shownLayout] = copy;
-            [self save];
-        }
-        [self rebuildButtons];
-        return;
+    _app = tag - 1;
+    [self rebuildButtons];
+}
+
+// The layouts the shown one can copy: all apps' (while an app is shown) and every other app's.
+- (std::vector<MenuItem>)copyItems {
+    std::vector<MenuItem> items;
+    if ([self showsApp]) items.push_back({@"All Apps", kAllApps, allAppsIcon()});
+    for (size_t i = 0; i < _cfg.apps.size(); i++)
+        if (static_cast<NSInteger>(i) != _app)
+            items.push_back({str(_cfg.apps[i].name), static_cast<int>(i) + 1, [self iconForApp:_cfg.apps[i].bundleId]});
+    return items;
+}
+
+// Under the app list: Remove (an app's own layout), Copy From and Restore Defaults. They are laid
+// out from the right, so Copy From and Restore Defaults stay put while Remove comes and goes.
+- (FormRow)layoutActions {
+    __weak MSettings* weakSelf = self;
+    FormRow row;
+    row.height = kRowH;
+    if ([self showsApp]) {
+        MButton* remove = [[MButton alloc] initWithTitle:@"Remove"];
+        remove.label = [@"Remove " stringByAppendingString:str(_cfg.apps[static_cast<size_t>(_app)].name)];
+        remove.onPress = ^{
+            [weakSelf removeApp];
+        };
+        row.trailing.push_back(remove);
     }
-    if (tag == kRemoveApp) {
-        if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size())) _cfg.apps.erase(_cfg.apps.begin() + _app);
-        _app = -1;
-        [self save];
-    } else {
-        _app = tag - 1;
+    std::vector<MenuItem> sources = [self copyItems];
+    if (!sources.empty()) {
+        MPullDown* copy = [[MPullDown alloc] initWithTitle:@"Copy From"];
+        copy.label = @"Copy buttons from";
+        [copy setItems:sources selected:-1];
+        copy.onSelect = ^(int tag) {
+            [weakSelf takeButtonsFrom:tag];
+        };
+        row.trailing.push_back(copy);
     }
+    MButton* reset = [[MButton alloc] initWithTitle:@"Restore Defaults"];
+    reset.onPress = ^{
+        [weakSelf restoreDefaults];
+    };
+    row.trailing.push_back(reset);
+    return row;
+}
+
+// The shown layout becomes a copy of another one (a Copy From tag).
+- (void)takeButtonsFrom:(int)tag {
+    const mouse::Layout* from = nullptr;
+    if (tag == kAllApps) from = &_cfg;
+    else if (tag > 0 && static_cast<size_t>(tag - 1) < _cfg.apps.size()) from = &_cfg.apps[static_cast<size_t>(tag - 1)];
+    mouse::Layout& to = [self shownLayout];
+    if (!from || from == &to) return;
+    to = *from;
+    [self save];
+    [self rebuildButtons];
+}
+
+// The shown app goes back to the buttons of all apps.
+- (void)removeApp {
+    if (![self showsApp]) return;
+    _cfg.apps.erase(_cfg.apps.begin() + _app);
+    _app = -1;
+    [self save];
     [self rebuildButtons];
 }
 
@@ -685,7 +721,7 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001, kCopyFrom = 20
     NSPopUpButton* popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     NSMenuItem* all = [popup.menu addItemWithTitle:@"All Apps" action:nil keyEquivalent:@""];
     all.tag = -1;
-    all.image = symbol(@"square.grid.2x2", 12, NSFontWeightRegular);
+    all.image = allAppsIcon();
     NSMenuItem* line = [NSMenuItem separatorItem];
     line.tag = -2;  // never mistaken for the first app (tag 0)
     [popup.menu addItem:line];
@@ -752,7 +788,7 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001, kCopyFrom = 20
 
 // All apps: Mouse's own defaults. An app: the same as all apps.
 - (void)restoreDefaults {
-    if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size()))
+    if ([self showsApp])
         static_cast<mouse::Layout&>(_cfg.apps[static_cast<size_t>(_app)]) = static_cast<const mouse::Layout&>(_cfg);
     else
         static_cast<mouse::Layout&>(_cfg) = mouse::Layout{};

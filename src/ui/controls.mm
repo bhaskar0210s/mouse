@@ -145,6 +145,15 @@ static NSColor* knobEdge() {
     return c;
 }
 
+NSRect ui::drawBezel(NSView* v, BOOL pressed) {
+    NSRect b = NSInsetRect(v.bounds, 0.5, 0.5);
+    b.size.height -= 0.5;
+    CGFloat r = b.size.height / 2;
+    drawKnobShadowed(b, r, bezelFill(), knobEdge());
+    if (pressed) fillRounded(b, r, pressFill());
+    return b;
+}
+
 // ============================================================================ MControl
 
 @implementation MControl {
@@ -476,11 +485,7 @@ static const CGFloat kKnob = 18;
 }
 
 - (void)drawRect:(NSRect)dirty {
-    NSRect b = NSInsetRect(self.bounds, 0.5, 0.5);
-    b.size.height -= 0.5;
-    CGFloat r = b.size.height / 2;
-    drawKnobShadowed(b, r, bezelFill(), knobEdge());
-    if (self.pressed) fillRounded(b, r, pressFill());
+    NSRect b = drawBezel(self, self.pressed);
     drawTextCentered(self, _title, font(13), [NSColor labelColor], NSMidX(b), NSMidY(b));
 }
 

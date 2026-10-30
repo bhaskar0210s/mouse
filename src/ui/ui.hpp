@@ -49,6 +49,7 @@ void drawSymbol(NSView* v, NSImage* img, NSPoint center, NSColor* tint);
 void fillRounded(NSRect r, CGFloat radius, NSColor* c);
 void strokeRounded(NSView* v, NSRect r, CGFloat radius, NSColor* c);  // 1 px, inside r
 void drawKnobShadowed(NSRect r, CGFloat radius, NSColor* fill, NSColor* edge);
+NSRect drawBezel(NSView* v, BOOL pressed);  // push button background over v's bounds; returns the bezel
 
 NSString* str(const std::string& s);
 NSString* str(const char* s);
@@ -109,6 +110,12 @@ struct MenuItem {
 @property(nonatomic, copy) void (^onSelect)(int tag);
 - (CGFloat)textInset;  // x of the title inside the button
 - (void)choose:(int)tag;
+@end
+
+// Push button with a list of commands: "Copy From ⌄". The list opens below it; choosing an item
+// calls onSelect and the button keeps its title. Set the items with selected: -1.
+@interface MPullDown : MPopup
+- (instancetype)initWithTitle:(NSString*)title;
 @end
 
 // Inline keyboard shortcut recorder.
