@@ -616,7 +616,8 @@ static NSImage* subIcon(NSString* name) { return symbol(name, 10, NSFontWeightSe
     return _cfg;
 }
 
-static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001;  // app items are 1 + their index
+// App items are 1 + their index; "Copy Buttons from" items are kCopyFrom + the source app's index.
+static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001, kCopyFrom = 2000;
 
 - (NSImage*)iconForApp:(const std::string&)bundleId {
     NSString* key = str(bundleId);
@@ -638,6 +639,14 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001;  // app items 
     items.push_back({@"All Apps", kAllApps, symbol(@"square.grid.2x2", 12, NSFontWeightRegular)});
     for (size_t i = 0; i < _cfg.apps.size(); i++)
         items.push_back({str(_cfg.apps[i].name), static_cast<int>(i) + 1, [self iconForApp:_cfg.apps[i].bundleId]});
+    // The layout shown can take the buttons of any other app set up already.
+    bool copies = false;
+    for (size_t i = 0; i < _cfg.apps.size(); i++) {
+        if (static_cast<NSInteger>(i) == _app) continue;
+        if (!copies) items.push_back({nil, -1});
+        copies = true;
+        items.push_back({[NSString stringWithFormat:@"Copy Buttons from “%@”", str(_cfg.apps[i].name)], kCopyFrom + static_cast<int>(i)});
+    }
     items.push_back({nil, -1});
     items.push_back({@"Add App…", kAddApp});
     if (_app >= 0 && _app < static_cast<NSInteger>(_cfg.apps.size()))
@@ -648,6 +657,17 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001;  // app items 
 - (void)chooseApp:(int)tag {
     if (tag == kAddApp) {
         [self addApp];
+        return;
+    }
+    if (tag >= kCopyFrom) {
+        // The shown layout (all apps, or one app) becomes a copy of another app's.
+        size_t from = static_cast<size_t>(tag - kCopyFrom);
+        if (from < _cfg.apps.size() && static_cast<NSInteger>(from) != _app) {
+            mouse::Layout copy = _cfg.apps[from];
+            [self shownLayout] = copy;
+            [self save];
+        }
+        [self rebuildButtons];
         return;
     }
     if (tag == kRemoveApp) {
