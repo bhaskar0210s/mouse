@@ -389,3 +389,21 @@ TEST(config_new_app_layout_copies_a_layout) {
     CHECK(static_cast<const Layout&>(other) == static_cast<const Layout&>(c));
     CHECK(other.name == "com.example.x");
 }
+
+TEST(bundle_folders_of_a_program) {
+    using Folders = std::vector<std::string>;
+    CHECK(bundleFolders("/Applications/Zed.app/Contents/MacOS/zed") == Folders{"/Applications/Zed.app"});
+    // Chrome runs from a copy of itself whose name does not end in .app.
+    std::string clone = "/private/var/folders/ab/cd/X/com.google.Chrome.code_sign_clone/code_sign_clone.x1/Google Chrome.app.bundle";
+    CHECK(bundleFolders(clone + "/Contents/MacOS/Google Chrome") == Folders{clone});
+    // A helper belongs to the app around it, which comes first.
+    CHECK(bundleFolders("/Applications/Mouse.app/Contents/Helpers/MouseAgent.app/Contents/MacOS/MouseAgent") ==
+          (Folders{"/Applications/Mouse.app", "/Applications/Mouse.app/Contents/Helpers/MouseAgent.app"}));
+    // A folder that merely holds a Contents folder is a candidate too; it has no bundle id, so the
+    // next one is tried.
+    CHECK(bundleFolders("/Volumes/Contents/Tool.app/Contents/MacOS/Tool") ==
+          (Folders{"/Volumes", "/Volumes/Contents/Tool.app"}));
+    CHECK(bundleFolders("/usr/bin/python3").empty());
+    CHECK(bundleFolders("/Contents/x").empty());
+    CHECK(bundleFolders("").empty());
+}

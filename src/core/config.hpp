@@ -135,6 +135,11 @@ struct Config : Layout {
 // The layout for the app with this bundle id: its own if it has one, else the one for all apps.
 const Layout& layoutFor(const Config& c, const std::string& bundleId);
 
+// The folders on a program's path that can be its app's bundle, outermost first (a helper inside
+// an app belongs to that app): each one that holds a Contents folder. Bundles are not always named
+// .app: Chrome runs from a copy of itself called "Google Chrome.app.bundle".
+std::vector<std::string> bundleFolders(const std::string& executable);
+
 // A layout for a newly added app: a copy of another app's (copyFrom = its index in c.apps) or,
 // for any other value, of the layout for all apps.
 AppLayout newAppLayout(const Config& c, const std::string& bundleId, const std::string& name, int copyFrom = -1);

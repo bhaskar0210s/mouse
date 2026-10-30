@@ -430,6 +430,13 @@ const Layout& layoutFor(const Config& c, const std::string& bundleId) {
     return c;
 }
 
+std::vector<std::string> bundleFolders(const std::string& executable) {
+    std::vector<std::string> folders;
+    for (size_t at = executable.find("/Contents/"); at != std::string::npos; at = executable.find("/Contents/", at + 1))
+        if (at > 0) folders.push_back(executable.substr(0, at));
+    return folders;
+}
+
 AppLayout newAppLayout(const Config& c, const std::string& bundleId, const std::string& name, int copyFrom) {
     AppLayout a;
     bool fromApp = copyFrom >= 0 && static_cast<size_t>(copyFrom) < c.apps.size();

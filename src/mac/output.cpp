@@ -93,16 +93,9 @@ struct ProcessSerial {
 using GetFrontProcessFn = int32_t (*)(ProcessSerial*);
 using GetProcessPIDFn = int32_t (*)(const ProcessSerial*, pid_t*);
 
-// Bundle id of the app a process belongs to, from the path of its executable.
-std::string bundleIdOf(pid_t pid) {
-    char path[PROC_PIDPATHINFO_MAXSIZE] = {};
-    if (proc_pidpath(pid, path, sizeof path) <= 0) return "";
-    std::string p = path;
-    size_t end = p.find(".app/Contents/");
-    if (end == std::string::npos) return "";
-    p.erase(end + 4);
-    CFURLRef url = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, reinterpret_cast<const UInt8*>(p.c_str()),
-                                                           static_cast<CFIndex>(p.size()), true);
+std::string bundleIdAt(const std::string& folder) {
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, reinterpret_cast<const UInt8*>(folder.c_str()),
+                                                           static_cast<CFIndex>(folder.size()), true);
     if (!url) return "";
     std::string id;
     if (CFBundleRef b = CFBundleCreate(kCFAllocatorDefault, url)) {
@@ -114,6 +107,17 @@ std::string bundleIdOf(pid_t pid) {
     }
     CFRelease(url);
     return id;
+}
+
+// Bundle id of the app a process belongs to, from the path of its executable.
+std::string bundleIdOf(pid_t pid) {
+    char path[PROC_PIDPATHINFO_MAXSIZE] = {};
+    if (proc_pidpath(pid, path, sizeof path) <= 0) return "";
+    for (const std::string& folder : bundleFolders(path)) {
+        std::string id = bundleIdAt(folder);
+        if (!id.empty()) return id;
+    }
+    return "";
 }
 
 }  // namespace
