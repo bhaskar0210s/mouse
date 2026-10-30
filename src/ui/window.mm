@@ -660,6 +660,26 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001;  // app items 
     [self rebuildButtons];
 }
 
+// "Copy buttons from:" under the app list, so a new app can start like one set up already.
+- (NSPopUpButton*)copySourcePopup {
+    NSPopUpButton* popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    NSMenuItem* all = [popup.menu addItemWithTitle:@"All Apps" action:nil keyEquivalent:@""];
+    all.tag = -1;
+    all.image = symbol(@"square.grid.2x2", 12, NSFontWeightRegular);
+    NSMenuItem* line = [NSMenuItem separatorItem];
+    line.tag = -2;  // never mistaken for the first app (tag 0)
+    [popup.menu addItem:line];
+    for (size_t i = 0; i < _cfg.apps.size(); i++) {
+        NSMenuItem* item = [popup.menu addItemWithTitle:str(_cfg.apps[i].name) action:nil keyEquivalent:@""];
+        item.tag = static_cast<NSInteger>(i);
+        item.image = [self iconForApp:_cfg.apps[i].bundleId];
+    }
+    [popup selectItemWithTag:-1];
+    popup.accessibilityLabel = @"Copy buttons from";
+    [popup sizeToFit];
+    return popup;
+}
+
 - (void)addApp {
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     panel.allowedContentTypes = @[ UTTypeApplicationBundle ];
@@ -668,17 +688,31 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001;  // app items 
     panel.allowsMultipleSelection = NO;
     panel.prompt = @"Add";
     panel.message = @"Choose an app to give its own buttons.";
+    NSPopUpButton* source = nil;
+    if (!_cfg.apps.empty()) {
+        source = [self copySourcePopup];
+        NSTextField* label = [NSTextField labelWithString:@"Copy buttons from:"];
+        NSStackView* row = [NSStackView stackViewWithViews:@[ label, source ]];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.spacing = 8;
+        row.edgeInsets = NSEdgeInsetsMake(12, 20, 12, 20);
+        [row setFrameSize:row.fittingSize];
+        panel.accessoryView = row;
+        panel.accessoryViewDisclosed = YES;
+    }
     __weak MSettings* weakSelf = self;
     [panel beginSheetModalForWindow:_window
                   completionHandler:^(NSModalResponse response) {
                       MSettings* me = weakSelf;
                       if (!me) return;
-                      if (response == NSModalResponseOK && panel.URL) [me addAppAtURL:panel.URL];
+                      if (response == NSModalResponseOK && panel.URL)
+                          [me addAppAtURL:panel.URL copyFrom:source ? source.selectedItem.tag : -1];
                       else [me rebuildButtons];  // the popup shows the current choice again
                   }];
 }
 
-- (void)addAppAtURL:(NSURL*)url {
+// An app that has a layout already is simply shown; a new one starts as a copy of `from`.
+- (void)addAppAtURL:(NSURL*)url copyFrom:(NSInteger)from {
     NSString* bundleId = [NSBundle bundleWithURL:url].bundleIdentifier;
     if (bundleId.length) {
         std::string id = bundleId.UTF8String;
@@ -688,11 +722,7 @@ static const int kAllApps = 0, kAddApp = 1000, kRemoveApp = 1001;  // app items 
         if (_app < 0) {
             NSString* name = [NSFileManager.defaultManager displayNameAtPath:url.path];
             if ([name.pathExtension isEqualToString:@"app"]) name = name.stringByDeletingPathExtension;
-            mouse::AppLayout a;
-            static_cast<mouse::Layout&>(a) = static_cast<const mouse::Layout&>(_cfg);  // starts like all apps
-            a.bundleId = id;
-            a.name = name.UTF8String ?: id;
-            _cfg.apps.push_back(a);
+            _cfg.apps.push_back(mouse::newAppLayout(_cfg, id, name.UTF8String ?: id, static_cast<int>(from)));
             _app = static_cast<NSInteger>(_cfg.apps.size()) - 1;
             [self save];
         }

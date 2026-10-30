@@ -370,3 +370,22 @@ TEST(stepper_steps_without_banking) {
     CHECK_EQ(s.feed(1, 15, 6.01, 0), 1);          // 14 + 1 completes a step
     CHECK_EQ(s.feed(0, 15, 6.02, 0), 0);
 }
+
+TEST(config_new_app_layout_copies_a_layout) {
+    Config c;
+    c.button(Control::Middle).act = Act::Dictation;
+    AppLayout chrome = newAppLayout(c, "com.google.Chrome", "Google Chrome");
+    CHECK(static_cast<const Layout&>(chrome) == static_cast<const Layout&>(c));  // like all apps
+    chrome.button(Control::Back) = {Act::Shortcut, parseShortcut("cmd+[")};
+    chrome.thumbWheel = WheelAct::Tabs;
+    c.apps.push_back(chrome);
+
+    AppLayout safari = newAppLayout(c, "com.apple.Safari", "Safari", 0);  // copy of Chrome's
+    CHECK(static_cast<const Layout&>(safari) == static_cast<const Layout&>(c.apps[0]));
+    CHECK(safari.bundleId == "com.apple.Safari");
+    CHECK(safari.name == "Safari");
+
+    AppLayout other = newAppLayout(c, "com.example.x", "", 7);  // no such app: like all apps, named by id
+    CHECK(static_cast<const Layout&>(other) == static_cast<const Layout&>(c));
+    CHECK(other.name == "com.example.x");
+}

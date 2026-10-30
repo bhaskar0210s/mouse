@@ -430,6 +430,16 @@ const Layout& layoutFor(const Config& c, const std::string& bundleId) {
     return c;
 }
 
+AppLayout newAppLayout(const Config& c, const std::string& bundleId, const std::string& name, int copyFrom) {
+    AppLayout a;
+    bool fromApp = copyFrom >= 0 && static_cast<size_t>(copyFrom) < c.apps.size();
+    static_cast<Layout&>(a) = fromApp ? static_cast<const Layout&>(c.apps[static_cast<size_t>(copyFrom)])
+                                      : static_cast<const Layout&>(c);
+    a.bundleId = bundleId;
+    a.name = name.empty() ? bundleId : name;
+    return a;
+}
+
 // The layout and settings for all apps come first; each app's own layout follows in a section:
 //   [app com.example.App]
 //   name = Example

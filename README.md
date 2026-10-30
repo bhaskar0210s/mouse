@@ -24,7 +24,8 @@ once closed.
   an app and let go. A shortcut can also be a single key like right ⌘ or left ⌥, held for as
   long as the button (the trigger many dictation apps use).
 - **Per app**: give any app buttons, gestures and a thumb wheel of its own; every other app uses
-  the layout for all apps. **Restore Defaults** puts a layout back.
+  the layout for all apps. A new app can start with the buttons of one you have set up already
+  (say Safari with Chrome's). **Restore Defaults** puts a layout back.
 - **Gestures**: hold the thumb button and move the mouse up, down, left or right.
 - **Point & Scroll**: pointer speed (200–8000 DPI), scrolling speed and direction, smooth
   scrolling, wheel mode (auto-shift, ratchet or free spin) and thumb-wheel speed and direction.

@@ -135,6 +135,10 @@ struct Config : Layout {
 // The layout for the app with this bundle id: its own if it has one, else the one for all apps.
 const Layout& layoutFor(const Config& c, const std::string& bundleId);
 
+// A layout for a newly added app: a copy of another app's (copyFrom = its index in c.apps) or,
+// for any other value, of the layout for all apps.
+AppLayout newAppLayout(const Config& c, const std::string& bundleId, const std::string& name, int copyFrom = -1);
+
 Config parseConfig(const std::string& text);
 std::string serializeConfig(const Config& c);
 
